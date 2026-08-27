@@ -1,0 +1,22 @@
+# .NET
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.user
+.vs/
+.vscode/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Secrets
+*.local.json
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
