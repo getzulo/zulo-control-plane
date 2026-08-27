@@ -1,0 +1,6 @@
+@ZuloOne.ControlPlane_HostAddress = http://localhost:5211
+
+GET {{ZuloOne.ControlPlane_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

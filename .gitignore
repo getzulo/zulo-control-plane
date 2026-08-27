@@ -20,3 +20,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local overrides (real connection strings, admin passwords)
+appsettings.Local.json
