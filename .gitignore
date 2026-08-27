@@ -23,3 +23,5 @@ Thumbs.db
 
 # Local overrides (real connection strings, admin passwords)
 appsettings.Local.json
+web/node_modules/
+web/dist/

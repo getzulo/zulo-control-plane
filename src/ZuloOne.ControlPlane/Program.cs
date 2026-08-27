@@ -8,6 +8,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
+// In production the control plane serves the dashboard itself (same origin); this
+// exists so the dashboard can be run from a Vite dev server against it.
+const string DashboardCors = "DashboardCors";
+var dashboardOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddPolicy(DashboardCors, policy =>
+    policy.WithOrigins(dashboardOrigins).AllowAnyHeader().AllowAnyMethod()));
+
 // The registry: the control plane's own database, deliberately separate from
 // every tenant's — losing a tenant must not lose the record of the fleet.
 builder.Services.AddDbContext<ControlPlaneDbContext>(options =>
@@ -49,6 +56,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<ControlPlaneDbContext>().Database.EnsureCreatedAsync();
 }
 
+app.UseCors(DashboardCors);
 app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
