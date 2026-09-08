@@ -55,6 +55,11 @@ public sealed class TenantProvisioner
         slug = slug.Trim().ToLowerInvariant();
         if (!IsValidSlug(slug))
             throw new ArgumentException("Slug must be a DNS label: lowercase letters, digits and dashes.", nameof(slug));
+        // Enforced HERE as well as in the API, because this is the only path every
+        // caller shares — a future admin tool, a seeding script or a migration that
+        // provisions directly would otherwise bypass the check entirely.
+        if (ReservedSlugs.IsReserved(slug))
+            throw new ArgumentException($"Slug '{slug}' is reserved for the platform.", nameof(slug));
         if (await _db.Tenants.AnyAsync(t => t.Slug == slug, ct))
             throw new InvalidOperationException($"Tenant '{slug}' already exists.");
 

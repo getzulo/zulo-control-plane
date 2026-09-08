@@ -1,5 +1,6 @@
 using Docker.DotNet;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -47,6 +48,12 @@ builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();
 
 var app = builder.Build();
+
+// Fold the configured extras into the reserved set before anything can provision.
+// ReservedSlugs is static because the check has to be reachable from the API, the
+// provisioner and any future tool without threading options through all three —
+// so it is seeded once, here, rather than resolved per request.
+ReservedSlugs.Configure(app.Services.GetRequiredService<IOptions<FleetSettings>>().Value.AdditionalReservedSlugs);
 
 // The registry schema is the control plane's own, so a fresh deployment should
 // not need a manual step. EnsureCreated is enough while the schema is one table;

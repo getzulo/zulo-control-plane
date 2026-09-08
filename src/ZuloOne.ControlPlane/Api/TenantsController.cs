@@ -60,6 +60,11 @@ public class TenantsController : ControllerBase
     {
         if (!TenantProvisioner.IsValidSlug(request.Slug))
             return BadRequest(new { error = "Slug must be a DNS label: lowercase letters, digits and dashes." });
+        // Separate answer from the shape check on purpose: "reserved" and
+        // "malformed" are different problems, and a caller told only "invalid" will
+        // keep trying variations of a name they are never going to get.
+        if (ReservedSlugs.IsReserved(request.Slug))
+            return BadRequest(new { error = $"Slug '{request.Slug?.Trim().ToLowerInvariant()}' is reserved for the platform. Choose another." });
         if (string.IsNullOrWhiteSpace(request.AdminEmail))
             return BadRequest(new { error = "An administrator e-mail is required — that is who gets the invitation." });
 

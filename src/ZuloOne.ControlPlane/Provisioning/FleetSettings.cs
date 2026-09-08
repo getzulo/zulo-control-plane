@@ -8,6 +8,17 @@ public sealed class FleetSettings
     /// <summary>Tenants answer at <c>{slug}.{RootDomain}</c>.</summary>
     public string RootDomain { get; set; } = "zulo.one";
 
+    /// <summary>
+    /// Subdomains to reserve ON TOP OF the compiled-in baseline in
+    /// <see cref="ReservedSlugs"/>. The list grows as products and environments
+    /// are added, and this is how it grows without cutting a release.
+    ///
+    /// It can only ADD. The baseline is not shortenable from configuration — an
+    /// empty or mistyped section here must never be able to hand a customer
+    /// <c>admin</c>.
+    /// </summary>
+    public string[] AdditionalReservedSlugs { get; set; } = [];
+
     /// <summary>Image every new tenant starts on; upgrades are per-tenant (§8).</summary>
     public string DefaultImage { get; set; } = "zuloone/core:dev";
 
