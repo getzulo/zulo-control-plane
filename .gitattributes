@@ -1,0 +1,12 @@
+# These run on Linux. On Windows with core.autocrlf=true a checkout rewrites them
+# to CRLF, and a commit from that machine can put CRLF into the index. The
+# interpreter then reads "#!/usr/bin/env bash\r" and fails with `bad interpreter:
+# ...^M` — or, for a Dockerfile entrypoint, `not found` for a file that is plainly
+# there. Neither message mentions line endings.
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Read by containers, CI and tooling; keep them byte-stable across platforms.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

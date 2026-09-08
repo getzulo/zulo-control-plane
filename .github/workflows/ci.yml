@@ -1,0 +1,290 @@
+# Build, gate and publish the ZuloOne control-plane image.
+#
+# Same shape and the same reasoning as the platform's workflow in zulo.one: a
+# self-hosted runner beside the fleet, publishing to the local registry:2 on
+# 127.0.0.1:5000. The Free plan's 2000 Actions minutes and 500 MB of package
+# storage do not stretch to two images.
+#
+# The IMAGE name below MUST differ from zuloone-core — the two share a registry,
+# and both derive versions from github.run_number, which is per-workflow. Same
+# name would mean two different applications overwriting each other's tags.
+#
+# DO NOT rename this file. github.run_number resets when a workflow is replaced,
+# which would send AssemblyVersion backwards.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Collapse bursts to the newest commit. Never cancel a tag build — that is a
+  # release, and a half-published tag is worse than a slow one.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions: {}
+
+env:
+  REGISTRY: localhost:5000
+  IMAGE: zuloone-controlplane
+
+jobs:
+  # --------------------------------------------------------------- backend ---
+  backend-gate:
+    runs-on: [self-hosted, linux, x64]
+    # The runner reaches the Docker socket, i.e. it is root on a box that also
+    # serves the fleet. Never let a fork's code near it.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        env:
+          # On a self-hosted runner setup-dotnet installs to /usr/share/dotnet,
+          # which the unprivileged runner user cannot write; the step dies with a
+          # bare `mkdir: Permission denied` naming neither path nor reason.
+          #
+          # Must live HERE, on the step: the `runner` context is not available in
+          # workflow- or job-level `env`, where it would evaluate to an empty
+          # string and make this `/dotnet` — the same failure, harder to see.
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build src/ZuloOne.ControlPlane/ZuloOne.ControlPlane.csproj -c Release
+
+      # Non-blocking on purpose. .NET 9+ enables NuGet Audit by default, and a
+      # third party's advisory landing overnight must not become our outage.
+      - name: Vulnerable packages (advisory only)
+        continue-on-error: true
+        run: dotnet list src/ZuloOne.ControlPlane/ZuloOne.ControlPlane.csproj package --vulnerable --include-transitive
+
+  # -------------------------------------------------------------- frontend ---
+  frontend-gate:
+    runs-on: [self-hosted, linux, x64]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Vite 8 requires 20.19+/22.12+; pin the major rather than discover the
+          # floor from a build failure.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run lint
+
+  # ----------------------------------------------------------------- image ---
+  image:
+    needs: [backend-gate, frontend-gate]
+    runs-on: [self-hosted, linux, x64]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # git tag -> VERSION -> AssemblyVersion -> image tag -> GET /health.
+      # Every link is asserted before anything is published.
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            raw="${GITHUB_REF#refs/tags/}"
+            if [[ ! "$raw" =~ ^v(20[0-9]{2})\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]; then
+              echo "::error::Bad release tag '$raw'. Required shape: vYYYY.M.P"
+              echo "::error::"
+              echo "::error::  No leading zeros -- v2026.8.0, NOT v2026.08.0."
+              echo "::error::  -p:Version=2026.08.0 stamps AssemblyVersion 2026.8.0, so"
+              echo "::error::  the image tag and GET /health would disagree forever."
+              echo "::error::"
+              echo "::error::  No prerelease suffix -- AssemblyVersion carries only"
+              echo "::error::  Major.Minor.Build, so v2026.9.0-rc1 and v2026.9.0 are"
+              echo "::error::  both '2026.9.0'. A candidate burns a patch number."
+              exit 1
+            fi
+            echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
+            echo "publish=true"     >> "$GITHUB_OUTPUT"
+          else
+            # Minor 0 is the sentinel for "not a release": zero is never a month,
+            # so CI versions and release versions cannot collide.
+            echo "version=$(date -u +%Y).0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "publish=${{ github.event_name == 'workflow_dispatch' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Tags are pinned per deployment and promised immutable. A registry will
+      # happily overwrite; refuse before we build.
+      - name: Refuse to overwrite an existing release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${{ steps.ver.outputs.version }}"
+          if curl -fsS "http://${REGISTRY}/v2/${IMAGE}/tags/list" 2>/dev/null \
+             | tr ',' '\n' | grep -q "\"${v}\""; then
+            echo "::error::${IMAGE}:${v} is already published. Tags are immutable — cut a new patch."
+            exit 1
+          fi
+
+      - name: Build image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f src/ZuloOne.ControlPlane/Dockerfile \
+            --build-arg VERSION="${{ steps.ver.outputs.version }}" \
+            -t "${REGISTRY}/${IMAGE}:${{ steps.ver.outputs.version }}" \
+            -t "${REGISTRY}/${IMAGE}:sha-$(git rev-parse --short HEAD)" .
+
+      - name: Smoke test
+        shell: bash
+        env:
+          SMOKE_NET: cp-smoke-${{ github.run_id }}
+          SMOKE_PG: cp-pg-${{ github.run_id }}
+          SMOKE_CP: cp-app-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.ver.outputs.version }}"
+          docker network create "$SMOKE_NET" >/dev/null
+          docker run -d --name "$SMOKE_PG" --network "$SMOKE_NET" \
+            -e POSTGRES_PASSWORD=smoke -e POSTGRES_DB=cp postgres:17-alpine >/dev/null
+          for i in $(seq 1 30); do
+            docker exec "$SMOKE_PG" pg_isready -q && break; sleep 2
+          done
+
+          # No Docker socket: nothing asserted below touches IDockerClient, and the
+          # singleton constructs lazily. A smoke test that needed the socket would
+          # be testing the runner, not the image.
+          docker run -d --name "$SMOKE_CP" --network "$SMOKE_NET" \
+            -e "ConnectionStrings__ControlPlane=Host=${SMOKE_PG};Database=cp;Username=postgres;Password=smoke" \
+            "${REGISTRY}/${IMAGE}:${v}" >/dev/null
+
+          ok=false
+          for i in $(seq 1 40); do
+            if body=$(docker exec "$SMOKE_CP" curl -fsS http://localhost:8080/health 2>/dev/null); then
+              ok=true; break
+            fi
+            sleep 3
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::Control plane never became healthy. Last 200 log lines:"
+            docker logs --tail 200 "$SMOKE_CP" || true
+            exit 1
+          fi
+          echo "health: $body"
+
+          # The version actually reached the assembly. A '0.0.0' here means
+          # -p:Version never made it to publish.
+          if ! printf '%s' "$body" | tr -d ' ' | grep -q "\"version\":\"${v}\""; then
+            echo "::error::/health reports a different version than the image tag ${v}."
+            exit 1
+          fi
+
+          # THE assertion. Nothing else catches an authorization policy that
+          # silently stopped applying, and the consequence is an unauthenticated
+          # API that creates and drops customer databases.
+          code=$(docker exec "$SMOKE_CP" curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/tenants)
+          if [ "$code" != "401" ]; then
+            echo "::error::GET /api/tenants answered ${code}, expected 401 — the fleet API is NOT behind authentication."
+            exit 1
+          fi
+
+          # A 500 here would mean the registry tables are missing, i.e. migrations
+          # did not run. 404 is the correct answer on the public listener, where
+          # password authentication deliberately does not exist.
+          code=$(docker exec "$SMOKE_CP" curl -s -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"email":"nobody@example.com","password":"x","totp":"000000"}' \
+            http://localhost:8080/api/auth/login)
+          if [ "$code" = "500" ]; then
+            echo "::error::POST /api/auth/login answered 500 — the registry schema is probably missing."
+            docker logs --tail 100 "$SMOKE_CP" || true
+            exit 1
+          fi
+
+          echo "Version ${v} confirmed, fleet API is closed, schema is present."
+
+      - name: Assert the dashboard is in the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh "${REGISTRY}/${IMAGE}:${{ steps.ver.outputs.version }}" \
+            -c 'test -s wwwroot/index.html' \
+            || { echo "::error::wwwroot/index.html is missing — the SPA stage produced nothing."; exit 1; }
+
+      # No response body may ever carry a tenant's database password or signing
+      # key. The registry stores both in clear, so this is the regression this
+      # codebase is most exposed to and it costs one grep.
+      - name: Assert secrets are not projected
+        shell: bash
+        env:
+          SMOKE_CP: cp-app-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for path in /api/tenants /api/fleet/health /api/auth/context; do
+            body=$(docker exec "$SMOKE_CP" curl -s "http://localhost:8080${path}" || true)
+            if printf '%s' "$body" | grep -qiE 'databasePassword|jwtSigningKey'; then
+              echo "::error::${path} leaked a secret field."
+              exit 1
+            fi
+          done
+
+      - name: Publish
+        if: steps.ver.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${REGISTRY}/${IMAGE}:${{ steps.ver.outputs.version }}"
+          docker push "${REGISTRY}/${IMAGE}:sha-$(git rev-parse --short HEAD)"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| image | \`${IMAGE}:${{ steps.ver.outputs.version }}\` |"
+            echo "| published | \`${{ steps.ver.outputs.publish }}\` |"
+            echo "| ref | \`${GITHUB_REF}\` |"
+            echo "| commit | \`${GITHUB_SHA:0:7}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up smoke containers
+        if: always()
+        shell: bash
+        env:
+          SMOKE_NET: cp-smoke-${{ github.run_id }}
+          SMOKE_PG: cp-pg-${{ github.run_id }}
+          SMOKE_CP: cp-app-${{ github.run_id }}
+        run: |
+          docker rm -f "${SMOKE_CP:-}" "${SMOKE_PG:-}" 2>/dev/null || true
+          docker network rm "${SMOKE_NET:-}" 2>/dev/null || true
+          # Layers accumulate monotonically on a persistent runner; dangling
+          # images are the part that is always safe to drop.
+          docker image prune -f >/dev/null 2>&1 || true
