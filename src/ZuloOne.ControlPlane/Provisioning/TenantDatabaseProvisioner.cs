@@ -74,15 +74,37 @@ public sealed class TenantDatabaseProvisioner
     {
         var host = string.IsNullOrWhiteSpace(_settings.TenantHost) ? _settings.Host : _settings.TenantHost;
         var ssl = _settings.RequireSsl ? "SSL Mode=Require;Trust Server Certificate=true;" : string.Empty;
-        return $"Host={host};Port={_settings.Port};Database={database};Username={role};Password={password};{ssl}";
+        return $"Host={host};Port={_settings.Port};Database={database};Username={role};Password={password};{ssl}"
+             + TargetPrimary(host);
     }
 
     private string AdminConnectionString(string? database = null)
     {
         var ssl = _settings.RequireSsl ? "SSL Mode=Require;Trust Server Certificate=true;" : string.Empty;
         return $"Host={_settings.Host};Port={_settings.Port};Database={database ?? _settings.AdminDatabase};"
-             + $"Username={_settings.AdminUser};Password={_settings.AdminPassword};{ssl}";
+             + $"Username={_settings.AdminUser};Password={_settings.AdminPassword};{ssl}"
+             + TargetPrimary(_settings.Host);
     }
+
+    /// <summary>
+    /// Pins a multi-host connection to the writable node.
+    /// </summary>
+    /// <remarks>
+    /// A replicated cluster is addressed by listing every node — Npgsql then probes
+    /// <c>pg_is_in_recovery()</c> and follows a failover on its own. Without
+    /// <c>Target Session Attributes=Primary</c> it simply takes whichever node answers
+    /// first, which may be a hot standby: every write then fails with
+    /// <c>cannot execute INSERT in a read-only transaction</c>, intermittently and
+    /// only under load, which is a genuinely unpleasant thing to diagnose.
+    ///
+    /// Both callers need it. The admin connection issues CREATE DATABASE / CREATE ROLE,
+    /// and the tenant connection runs EF migrations and generates DDL on every boot.
+    ///
+    /// Only emitted for a host LIST: on a single host the parameter is redundant, and
+    /// adding it would make a standalone standby unusable for read-only work.
+    /// </remarks>
+    private static string TargetPrimary(string host) =>
+        host.Contains(',') ? "Target Session Attributes=Primary;" : string.Empty;
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, string sql, CancellationToken ct)
     {

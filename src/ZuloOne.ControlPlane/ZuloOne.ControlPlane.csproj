@@ -9,8 +9,15 @@
   <ItemGroup>
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="MailKit" Version="4.17.0" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
   </ItemGroup>
+
+  <!--
+    Microsoft.AspNetCore.OpenApi was referenced but never used — no AddOpenApi(),
+    no MapOpenApi(), no Swagger UI anywhere in the source. It dragged in
+    Microsoft.OpenApi 2.0.0, which carries a known high-severity advisory
+    (GHSA-v5pm-xwqc-g5wc), so a dead reference was the project's only vulnerable
+    package. Add it back deliberately if the API ever needs a schema endpoint.
+  -->
 
 </Project>
