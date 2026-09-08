@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ZuloOne.ControlPlane.Auth;
 
 namespace ZuloOne.ControlPlane.Registry;
 
@@ -13,6 +14,10 @@ public class ControlPlaneDbContext : DbContext
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
 
+    public DbSet<OperatorAccount> OperatorAccounts => Set<OperatorAccount>();
+
+    public DbSet<OperatorSession> OperatorSessions => Set<OperatorSession>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -21,5 +26,18 @@ public class ControlPlaneDbContext : DbContext
         modelBuilder.Entity<Tenant>().HasIndex(t => t.Slug).IsUnique();
         modelBuilder.Entity<Tenant>().Property(t => t.Status).HasConversion<string>();
         modelBuilder.Entity<Tenant>().Property(t => t.Health).HasConversion<string>();
+
+        modelBuilder.Entity<OperatorAccount>().HasIndex(a => a.Email).IsUnique();
+
+        // Indexed and unique: this is looked up on every authenticated request, and
+        // the uniqueness is what makes a lookup by hash unambiguous.
+        modelBuilder.Entity<OperatorSession>().HasIndex(s => s.TokenHash).IsUnique();
+        // Cascade so that removing the account cannot leave sessions that would
+        // still authenticate against nothing.
+        modelBuilder.Entity<OperatorSession>()
+            .HasOne(s => s.Account)
+            .WithMany()
+            .HasForeignKey(s => s.OperatorAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

@@ -10,6 +10,22 @@
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!-- Validates the Cloudflare Access assertion. Also brings the OpenID Connect
+         configuration manager, which is what keeps the panel reachable when
+         Cloudflare rotates its Access signing keys every six weeks. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.3" />
+    <!-- The break-glass operator's password. -->
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <!-- The break-glass operator's second factor. RFC 6238. -->
+    <PackageReference Include="Otp.NET" Version="1.4.0" />
+    <!-- Migrations. The registry is no longer created by EnsureCreated: that only
+         acts on a database with NO tables at all, so the first column added after
+         a deployment would compile, boot, pass /health and then throw 42P01 at the
+         first query that touches it. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.3">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <!--

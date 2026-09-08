@@ -65,13 +65,26 @@ RUN apt-get update \
 COPY --from=build /app/publish ./
 COPY --from=spa /spa/dist ./wwwroot
 
-ENV ASPNETCORE_URLS=http://+:8080
+# Two listeners. The public one carries the API and the dashboard; 5099 is the
+# ONLY place password authentication exists.
+#
+# Both bind to +, not 127.0.0.1. A container-loopback bind would be unreachable
+# even through an SSH tunnel, because that loopback is the CONTAINER's, not the
+# host's. The isolation comes from how the port is published instead — the
+# deployment must map it to the host's loopback only:
+#
+#   -p 8080:8080 -p 127.0.0.1:5099:5099
+#
+# Then break-glass is reached with `ssh -L 5099:127.0.0.1:5099 zo-cp-1` and from
+# nowhere else. Publish 5099 on 0.0.0.0 and the password endpoint is on the LAN.
+ENV ASPNETCORE_URLS="http://+:8080;http://+:5099"
 ENV ASPNETCORE_ENVIRONMENT=Production
 
 EXPOSE 8080
 
-# No migrations, no schema sync and no Roslyn compile before Kestrel binds — the
-# registry is one table — so this needs nothing like the tenant image's 180s.
+# No migrations of consequence, no schema sync and no Roslyn compile before
+# Kestrel binds — the registry is three small tables — so this needs nothing like
+# the tenant image's 180s.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8080/health || exit 1
 

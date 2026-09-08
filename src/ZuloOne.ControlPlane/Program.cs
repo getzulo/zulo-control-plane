@@ -1,6 +1,9 @@
 using Docker.DotNet;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Threading.RateLimiting;
+using ZuloOne.ControlPlane.Auth;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -8,6 +11,35 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+
+// Two ways in, both cryptographically verified, either sufficient: Cloudflare
+// Access for the normal path and a break-glass operator for when Cloudflare is
+// what is broken. See Auth/AuthSetup.cs.
+builder.Services.AddControlPlaneAuth(
+    builder.Configuration,
+    LoggerFactory.Create(b => b.AddConsole()).CreateLogger("ControlPlane.Auth"));
+
+// Protects bcrypt from being used as a CPU sink. It is NOT the security control —
+// the per-account lockout is, because it cannot be sidestepped by rotating source
+// addresses.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("operator-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        // CF-Connecting-IP first. Behind Cloudflare, RemoteIpAddress is an edge
+        // address shared by every request in the world, so partitioning on it is
+        // worse than not rate limiting at all: one attacker exhausts the bucket the
+        // real operator needs.
+        context.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+});
 
 // In production the control plane serves the dashboard itself (same origin); this
 // exists so the dashboard can be run from a Vite dev server against it.
@@ -64,27 +96,34 @@ ReservedSlugs.Configure(app.Services.GetRequiredService<IOptions<FleetSettings>>
 // The registry schema is the control plane's own, so a fresh deployment should
 // not need a manual step.
 //
-// KNOW THE LIMIT: EnsureCreated creates the schema only when the database has no
-// tables at all. On a registry that already holds Tenants it returns false and
-// creates NOTHING — so a new column or table added to the model compiles,
-// deploys, boots and passes /health, then throws 42P01 at the first query that
-// touches it. That is the worst moment to find out.
-//
-// It is still correct today because the registry has never been deployed. The
-// first change to this model after it IS deployed must convert to migrations
-// first; do not add a property and assume this line will apply it.
+// Migrations, NOT EnsureCreated. EnsureCreated builds the schema only when the
+// database has no tables at all: on a registry that already holds Tenants it
+// returns false and creates nothing, so a new column or table would compile,
+// deploy, boot, pass /health, and then throw 42P01 at the first query touching
+// it — which is the worst possible moment to find out.
 using (var scope = app.Services.CreateScope())
 {
-    await scope.ServiceProvider.GetRequiredService<ControlPlaneDbContext>().Database.EnsureCreatedAsync();
+    await scope.ServiceProvider.GetRequiredService<ControlPlaneDbContext>().Database.MigrateAsync();
+    await OperatorSeeder.SeedAsync(
+        scope.ServiceProvider,
+        scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("ControlPlane.Operator"));
 }
 
-// Static files BEFORE the API: they are middleware rather than endpoints, so
-// they bypass any authorization policy and the dashboard can load its own assets
-// without a credential. That is what lets a login screen render at all.
+// Static files BEFORE authentication: they are middleware rather than endpoints,
+// so they bypass the authorization policy entirely and the dashboard can load its
+// own assets without a credential. That is what lets a login screen render at all.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.UseCors(DashboardCors);
+
+// Explicit, because endpoint-scoped rate limiting needs routing to have run and
+// minimal hosting's implicit insertion point is not guaranteed to be before it.
+app.UseRouting();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapControllers();
 
 // Version, not just liveness: it is what makes the release pipeline able to
@@ -94,7 +133,7 @@ app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
     version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
-}));
+})).AllowAnonymous();
 
 // The /api guard is load-bearing. Without it an unmatched API route returns
 // index.html with a 200, so a caller sees HTML where it expected JSON and the
@@ -116,6 +155,6 @@ app.MapFallback(async context =>
 
     context.Response.ContentType = "text/html";
     await context.Response.SendFileAsync(index);
-});
+}).AllowAnonymous();
 
 app.Run();
