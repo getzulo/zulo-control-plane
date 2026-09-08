@@ -24,7 +24,13 @@ public sealed class TenantHealthProbe
         try
         {
             using var client = _httpClientFactory.CreateClient("tenant");
-            using var response = await client.GetAsync($"http://{host}/health", ct);
+            // https rather than http-and-follow-the-redirect. A GET survives the
+            // edge's 301 unharmed, so this is not a correctness fix here — but a
+            // probe that only reports ready after a round trip through the redirect
+            // is measuring the edge as much as the tenant. The same call in
+            // TenantInviteService is a POST, where the redirect silently rewrites
+            // it to a GET; keeping both on https keeps the two in step.
+            using var response = await client.GetAsync($"https://{host}/health", ct);
             return response.IsSuccessStatusCode;
         }
         catch

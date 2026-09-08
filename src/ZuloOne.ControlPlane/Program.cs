@@ -47,6 +47,12 @@ builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();
 
+// Provisioning takes minutes and must not depend on the caller staying connected.
+// Singleton queue, hosted worker, one scope per tenant — see ProvisioningQueue.cs.
+builder.Services.AddSingleton<ProvisioningQueue>();
+builder.Services.AddSingleton<IProvisioningQueue>(sp => sp.GetRequiredService<ProvisioningQueue>());
+builder.Services.AddHostedService<ProvisioningWorker>();
+
 var app = builder.Build();
 
 // Fold the configured extras into the reserved set before anything can provision.
@@ -56,15 +62,60 @@ var app = builder.Build();
 ReservedSlugs.Configure(app.Services.GetRequiredService<IOptions<FleetSettings>>().Value.AdditionalReservedSlugs);
 
 // The registry schema is the control plane's own, so a fresh deployment should
-// not need a manual step. EnsureCreated is enough while the schema is one table;
-// it becomes a migration once the shape starts changing under a live fleet.
+// not need a manual step.
+//
+// KNOW THE LIMIT: EnsureCreated creates the schema only when the database has no
+// tables at all. On a registry that already holds Tenants it returns false and
+// creates NOTHING — so a new column or table added to the model compiles,
+// deploys, boots and passes /health, then throws 42P01 at the first query that
+// touches it. That is the worst moment to find out.
+//
+// It is still correct today because the registry has never been deployed. The
+// first change to this model after it IS deployed must convert to migrations
+// first; do not add a property and assume this line will apply it.
 using (var scope = app.Services.CreateScope())
 {
     await scope.ServiceProvider.GetRequiredService<ControlPlaneDbContext>().Database.EnsureCreatedAsync();
 }
 
+// Static files BEFORE the API: they are middleware rather than endpoints, so
+// they bypass any authorization policy and the dashboard can load its own assets
+// without a credential. That is what lets a login screen render at all.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseCors(DashboardCors);
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// Version, not just liveness: it is what makes the release pipeline able to
+// assert that the tag, the assembly and the running container agree. A bare
+// {status:"ok"} gives the smoke test nothing to compare.
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "ok",
+    version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
+}));
+
+// The /api guard is load-bearing. Without it an unmatched API route returns
+// index.html with a 200, so a caller sees HTML where it expected JSON and the
+// dashboard looks empty rather than broken.
+app.MapFallback(async context =>
+{
+    if (context.Request.Path.StartsWithSegments("/api"))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    var index = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html");
+    if (!File.Exists(index))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    context.Response.ContentType = "text/html";
+    await context.Response.SendFileAsync(index);
+});
 
 app.Run();

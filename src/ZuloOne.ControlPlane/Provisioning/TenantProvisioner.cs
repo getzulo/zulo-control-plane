@@ -49,7 +49,15 @@ public sealed class TenantProvisioner
 
     public static bool IsValidSlug(string? slug) => !string.IsNullOrWhiteSpace(slug) && SlugPattern.IsMatch(slug);
 
-    public async Task<Tenant> ProvisionAsync(
+    /// <summary>
+    /// Claims the slug and records the intent — fast, and safe to run on an HTTP
+    /// request. Everything slow happens later in <see cref="BuildAsync"/>.
+    ///
+    /// Split from the build deliberately: the caller needs an immediate answer to
+    /// "is this slug even allowed", and validation failures should be a 400 rather
+    /// than a row that turns Failed a minute later.
+    /// </summary>
+    public async Task<Tenant> RegisterAsync(
         string slug, string? displayName, string adminEmail, string? imageTag, string? plan, CancellationToken ct = default)
     {
         slug = slug.Trim().ToLowerInvariant();
@@ -76,6 +84,22 @@ public sealed class TenantProvisioner
         };
         _db.Tenants.Add(tenant);
         await _db.SaveChangesAsync(ct);
+        return tenant;
+    }
+
+    /// <summary>
+    /// Builds a registered tenant: database → container → wait for ready → seed the
+    /// administrator → invite. Minutes, not seconds.
+    ///
+    /// Runs on a background worker with its own lifetime, NOT on the HTTP request
+    /// that asked for the tenant. It used to run inline, which meant a closed tab
+    /// or a proxy's idle timeout cancelled provisioning halfway — see the catch
+    /// block for what that left behind.
+    /// </summary>
+    public async Task<Tenant> BuildAsync(Tenant tenant, CancellationToken ct = default)
+    {
+        var slug = tenant.Slug;
+        var adminEmail = tenant.AdminEmail ?? string.Empty;
 
         try
         {
@@ -99,7 +123,13 @@ public sealed class TenantProvisioner
             // POST /api/auth/setup is one-shot and anonymous: it only works while
             // the user table is empty, which is exactly now.
             var invitePassword = await _invites.SeedAdministratorAsync(_containers.HostFor(slug), adminEmail, ct);
-            await _invites.SendInviteAsync(tenant, _containers.HostFor(slug), invitePassword, ct);
+            var invited = await _invites.SendInviteAsync(tenant, _containers.HostFor(slug), invitePassword, ct);
+
+            // Hold the password only when nothing else carries it. If the mail went
+            // out, that IS the delivery and a second copy here would be liability
+            // for no gain. If it did not, this row is the only thing standing
+            // between the customer and a workspace nobody can sign in to.
+            tenant.AdminPasswordOnce = invited ? null : invitePassword;
 
             tenant.Status = TenantStatus.Active;
             tenant.Health = TenantHealth.Ok;
@@ -113,14 +143,26 @@ public sealed class TenantProvisioner
         catch (Exception ex)
         {
             _logger.LogError(ex, "Provisioning tenant {Slug} failed — rolling back", slug);
+
+            // CancellationToken.None from here down, deliberately. The commonest
+            // way to reach this block is the caller giving up — a closed tab, a
+            // proxy cutting an idle request — and `ct` is then already cancelled.
+            // Passing it on made SaveChangesAsync throw on the very next line, so
+            // the exception escaped this handler and the rollback below never ran:
+            // a live container and a created database were left behind, the row
+            // still reading Provisioning, with nothing in the service that ever
+            // revisits it. The tenant then sat on its public hostname with an
+            // empty user table until a human noticed.
+            //
+            // Cleanup must not be contingent on whether anyone is still listening.
             tenant.Status = TenantStatus.Failed;
             tenant.LastError = ex.Message;
-            await SaveAsync(tenant, ct);
+            await SaveAsync(tenant, CancellationToken.None);
 
             // Roll the half-built tenant back so a retry starts clean. The row is
             // KEPT (failed, with its error) — silently vanishing would hide the
             // failure from whoever asked for the tenant.
-            await SafeRollbackAsync(tenant, ct);
+            await SafeRollbackAsync(tenant, CancellationToken.None);
             throw;
         }
     }

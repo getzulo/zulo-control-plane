@@ -22,6 +22,7 @@ public class TenantsController : ControllerBase
     private readonly TenantProvisioner _provisioner;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
+    private readonly IProvisioningQueue _queue;
     private readonly ILogger<TenantsController> _logger;
 
     public TenantsController(
@@ -29,12 +30,14 @@ public class TenantsController : ControllerBase
         TenantProvisioner provisioner,
         TenantContainerService containers,
         TenantHealthProbe health,
+        IProvisioningQueue queue,
         ILogger<TenantsController> logger)
     {
         _db = db;
         _provisioner = provisioner;
         _containers = containers;
         _health = health;
+        _queue = queue;
         _logger = logger;
     }
 
@@ -70,9 +73,15 @@ public class TenantsController : ControllerBase
 
         try
         {
-            var tenant = await _provisioner.ProvisionAsync(
+            // Two steps: claim the slug now, build it later. The caller gets an
+            // immediate answer about whether the name is allowed, and the minutes
+            // of database + container + first-boot work happen on a worker whose
+            // lifetime is the service's, not this request's.
+            var tenant = await _provisioner.RegisterAsync(
                 request.Slug, request.DisplayName, request.AdminEmail, request.ImageTag, request.Plan, ct);
-            return Ok(Summary(tenant));
+            _queue.Enqueue(tenant.Id);
+
+            return Accepted($"/api/tenants/{tenant.Id}", Summary(tenant));
         }
         catch (InvalidOperationException ex)
         {
@@ -106,6 +115,35 @@ public class TenantsController : ControllerBase
         await _containers.RestartAsync(tenant.ContainerId!, ct);
         tenant.Status = TenantStatus.Active;
     });
+
+    /// <summary>
+    /// The administrator password minted at provisioning — returned ONCE, then
+    /// erased from the registry.
+    ///
+    /// Only ever populated when the invitation could not be sent (mail disabled or
+    /// SMTP failed). Without this the workspace is unreachable by anyone: the
+    /// password went nowhere, and the tenant's own one-shot setup endpoint has
+    /// already been consumed, so it cannot be claimed again either.
+    ///
+    /// Reading it clears it. A second call returns 404, which is the intended
+    /// answer — if the operator lost it, the recovery is a password reset inside
+    /// the tenant, not another copy from here.
+    /// </summary>
+    [HttpPost("{id:guid}/admin-password")]
+    public async Task<IActionResult> RevealAdminPassword(Guid id, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant == null) return NotFound(new { error = "Tenant not found", id });
+        if (string.IsNullOrEmpty(tenant.AdminPasswordOnce))
+            return NotFound(new { error = "No unread password for this tenant — it was either delivered by e-mail or already read once." });
+
+        var password = tenant.AdminPasswordOnce;
+        tenant.AdminPasswordOnce = null;
+        await SaveAsync(tenant, ct);
+
+        _logger.LogInformation("One-time administrator password for {Slug} was read and erased", tenant.Slug);
+        return Ok(new { user = "admin", password, note = "Shown once. Change it after the first sign-in." });
+    }
 
     /// <summary>Container logs — the first thing to look at when a tenant misbehaves.</summary>
     [HttpGet("{id:guid}/logs")]
@@ -196,6 +234,10 @@ public class TenantsController : ControllerBase
         t.Plan,
         t.DatabaseName,
         containerId = t.ContainerId == null ? null : t.ContainerId[..Math.Min(12, t.ContainerId.Length)],
+        // The FLAG, never the value — the value comes only from the explicit
+        // one-shot endpoint, so it cannot be picked up incidentally by anything
+        // that happens to list the fleet.
+        hasUnreadAdminPassword = !string.IsNullOrEmpty(t.AdminPasswordOnce),
         t.LastHealthAt,
         t.LastError,
         t.CreatedAt,

@@ -31,11 +31,56 @@ public sealed class TenantDatabaseProvisioner
         await using var admin = new NpgsqlConnection(AdminConnectionString());
         await admin.OpenAsync(ct);
 
+        // PostgreSQL 16 stopped letting a CREATEROLE role implicitly act as the
+        // roles it creates. Without this the statement AFTER the next one fails:
+        //
+        //   42501: must be able to SET ROLE "tenant_<slug>"
+        //
+        // because CREATE DATABASE ... OWNER requires the creator to be able to
+        // become that owner. This GUC makes each CREATE ROLE grant membership back
+        // to the creator with SET — exactly the capability the next line needs, and
+        // nothing beyond it.
+        //
+        // A no-op when the admin connection is a superuser, so it is safe either
+        // way, and far preferable to making the control plane a superuser: that
+        // would let a compromise read every tenant's data rather than only create
+        // databases.
+        await ExecuteAsync(admin, "SET createrole_self_grant = 'set, inherit'", ct);
+
         // Identifiers cannot be parameterised, so they are quoted and the slug is
         // validated up front (see TenantProvisioner.ValidateSlug) — a slug is a DNS
         // label, which excludes everything that could break out of the quotes.
-        await ExecuteAsync(admin, $"CREATE ROLE \"{role}\" WITH LOGIN PASSWORD '{password.Replace("'", "''")}'", ct);
-        await ExecuteAsync(admin, $"CREATE DATABASE \"{database}\" OWNER \"{role}\"", ct);
+        //
+        // Cleans up after ITSELF on failure. The caller cannot: it learns the role
+        // and database names only from this method's return value, so anything that
+        // throws partway leaves artifacts the caller has no record of and cannot
+        // roll back. Observed exactly that — CREATE ROLE succeeded, CREATE DATABASE
+        // failed, and the orphaned role then made every retry of the same slug fail
+        // with 42710 "role already exists", which reads as a duplicate-tenant error
+        // rather than debris from the previous attempt.
+        var roleCreated = false;
+        try
+        {
+            await ExecuteAsync(admin, $"CREATE ROLE \"{role}\" WITH LOGIN PASSWORD '{password.Replace("'", "''")}'", ct);
+            roleCreated = true;
+            await ExecuteAsync(admin, $"CREATE DATABASE \"{database}\" OWNER \"{role}\"", ct);
+        }
+        catch
+        {
+            if (roleCreated)
+            {
+                // CancellationToken.None: the cleanup must not be skipped because
+                // the thing that failed was a cancellation.
+                try { await ExecuteAsync(admin, $"DROP ROLE IF EXISTS \"{role}\"", CancellationToken.None); }
+                catch (Exception cleanup)
+                {
+                    _logger.LogError(cleanup,
+                        "Could not drop role {Role} after a failed create — a retry of this slug will report that the role already exists",
+                        role);
+                }
+            }
+            throw;
+        }
 
         // PG15+ revoked CREATE on public from non-owners; without this the tenant's
         // first boot cannot create its own tables.

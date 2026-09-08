@@ -41,7 +41,13 @@ public sealed class TenantInviteService
         var password = GeneratePassword();
         using var client = _httpClientFactory.CreateClient("tenant");
 
-        using var response = await client.PostAsJsonAsync($"http://{host}/api/auth/setup", new
+        // https, NOT http. The edge answers plain HTTP with a 301, and HttpClient
+        // follows a 301 on a POST by re-issuing it as a GET — quietly, per RFC 7231.
+        // /api/auth/setup has no GET route, so the seeding call came back 404 and
+        // read as "the tenant does not have that endpoint" rather than "the request
+        // was downgraded in flight". The health probe never noticed because it is a
+        // GET already.
+        using var response = await client.PostAsJsonAsync($"https://{host}/api/auth/setup", new
         {
             name = "admin",
             email = adminEmail,
@@ -63,15 +69,22 @@ public sealed class TenantInviteService
     /// still a working tenant, so this never throws — it reports, and the operator
     /// can resend from the dashboard.
     /// </summary>
-    public async Task SendInviteAsync(Tenant tenant, string host, string password, CancellationToken ct = default)
+    /// <returns>
+    /// True only when the mail was actually handed to an SMTP server. The caller
+    /// needs to know, because the seeded password exists nowhere else: if this is
+    /// false and the caller discards it, the tenant is left with an `admin` account
+    /// whose password does not exist anywhere, and `setup-required` already answers
+    /// false — so it cannot legitimately be claimed again either.
+    /// </returns>
+    public async Task<bool> SendInviteAsync(Tenant tenant, string host, string password, CancellationToken ct = default)
     {
         if (!_mail.Enabled || string.IsNullOrWhiteSpace(_mail.Host)
             || string.IsNullOrWhiteSpace(_mail.FromAddress) || string.IsNullOrWhiteSpace(tenant.AdminEmail))
         {
             _logger.LogWarning(
-                "No mail configured — administrator for {Slug} was created but NOT invited. Password is not stored; reset it from the tenant.",
+                "No mail configured — administrator for {Slug} was created but NOT invited. The one-time password is held on the registry row until it is read once.",
                 tenant.Slug);
-            return;
+            return false;
         }
 
         var url = $"https://{host}";
@@ -100,11 +113,13 @@ public sealed class TenantInviteService
             await client.DisconnectAsync(true, ct);
 
             _logger.LogInformation("Invited {Email} to tenant {Slug}", tenant.AdminEmail, tenant.Slug);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Could not invite {Email} to tenant {Slug} — the tenant is up regardless",
                 tenant.AdminEmail, tenant.Slug);
+            return false;
         }
     }
 

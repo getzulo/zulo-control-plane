@@ -44,10 +44,24 @@ public sealed class TenantContainerService
             // recognised as a tenant rather than guessed at by name.
             ["zuloone.tenant.id"] = tenant.Id.ToString(),
             ["zuloone.tenant.slug"] = tenant.Slug,
+            // ALWAYS set, independently of the resolver below. The router is bound
+            // to the `websecure` entrypoint, and a router there without tls=true
+            // does not match TLS traffic at all — the edge answers 404, the health
+            // probe never succeeds, and provisioning dies on the readiness timeout
+            // minutes later. Nothing in that chain mentions a missing label.
+            //
+            // Production deliberately has NO cert resolver: the certificate is a
+            // Cloudflare Origin CA wildcard served from Traefik's default TLS store
+            // (traefik/dynamic/tls.yml). Gating tls=true on the resolver therefore
+            // disabled it exactly where it was needed, while the hand-deployed
+            // tenant kept working because its compose file sets the label directly.
+            [$"traefik.http.routers.{router}.tls"] = "true",
         };
+        // Only when ACME is actually in use. With the file-provider store there is
+        // nothing to resolve, and naming a resolver that does not exist makes
+        // Traefik reject the router.
         if (!string.IsNullOrWhiteSpace(_fleet.TraefikCertResolver))
         {
-            labels[$"traefik.http.routers.{router}.tls"] = "true";
             labels[$"traefik.http.routers.{router}.tls.certresolver"] = _fleet.TraefikCertResolver;
         }
 

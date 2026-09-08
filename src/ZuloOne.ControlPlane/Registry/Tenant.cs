@@ -81,6 +81,23 @@ public class Tenant
     [MaxLength(320)]
     public string? AdminEmail { get; set; }
 
+    /// <summary>
+    /// The administrator password minted at provisioning, held ONLY until it has
+    /// been read once, then nulled.
+    ///
+    /// It exists because the alternative is worse. The password is generated during
+    /// provisioning and, with mail disabled, delivered nowhere; the tenant then
+    /// reaches Active with an `admin` account whose password exists nowhere at all,
+    /// and its own `setup-required` already answers false — so it cannot be claimed
+    /// again either. The workspace is simply unreachable by anyone.
+    ///
+    /// Cleared the moment it is read, and never written at all when the invitation
+    /// was actually sent: in that case the mail is the delivery, and a second copy
+    /// sitting in the registry is pure liability.
+    /// </summary>
+    [MaxLength(200)]
+    public string? AdminPasswordOnce { get; set; }
+
     [MaxLength(50)]
     public string? Plan { get; set; }
 
