@@ -60,6 +60,23 @@ public sealed class ProvisioningWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await DrainAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Ordinary shutdown. ReadAllAsync throws when its token is cancelled,
+            // and BackgroundServiceExceptionBehavior defaults to StopHost — so
+            // letting this escape makes every clean stop log as "a BackgroundService
+            // has thrown an unhandled exception" and buries whatever actually caused
+            // the shutdown underneath it. That is exactly how a certificate the
+            // container could not read presented as a crashing worker.
+        }
+    }
+
+    private async Task DrainAsync(CancellationToken stoppingToken)
+    {
         await foreach (var tenantId in _queue.Reader.ReadAllAsync(stoppingToken))
         {
             // Serial on purpose. Two tenants building at once means two first-boot
@@ -89,10 +106,17 @@ public sealed class ProvisioningWorker : BackgroundService
                 // Provisioning and the container may exist; §A2's rollback cannot
                 // help here because the process is going away. Say so plainly —
                 // this is the one case that still needs a human.
+                //
+                // Returned, NOT rethrown. BackgroundServiceExceptionBehavior
+                // defaults to StopHost, so an exception leaving this method is
+                // treated as fatal and logged as "a BackgroundService has thrown an
+                // unhandled exception" — which turns every ordinary shutdown into
+                // something that reads like a crash, and buries whatever actually
+                // caused the shutdown underneath it.
                 _logger.LogWarning(
                     "Shutting down while building tenant {TenantId} — it may be left half-built; check for an orphan container",
                     tenantId);
-                throw;
+                return;
             }
             catch (Exception ex)
             {

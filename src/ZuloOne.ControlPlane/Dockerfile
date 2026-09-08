@@ -82,11 +82,12 @@ ENV ASPNETCORE_ENVIRONMENT=Production
 
 EXPOSE 8080
 
-# No migrations of consequence, no schema sync and no Roslyn compile before
-# Kestrel binds — the registry is three small tables — so this needs nothing like
-# the tenant image's 180s.
+# Aimed at the loopback listener, deliberately. The public one may be HTTPS with
+# the Cloudflare Origin CA certificate — which nothing but Cloudflare trusts — so
+# a probe there would need -k, and a probe with -k proves less than one that does
+# not. 5099 is always plain HTTP and always present.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8080/health || exit 1
+    CMD curl -fsS http://127.0.0.1:5099/health || exit 1
 
 USER $APP_UID
 
