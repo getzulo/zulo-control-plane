@@ -2,8 +2,6 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.IdentityModel.Protocols;
-using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace ZuloOne.ControlPlane.Auth;
@@ -32,13 +30,29 @@ public static class AuthSetup
         {
             auth.AddJwtBearer(AccessScheme, options =>
             {
-                var certs = $"{access.TeamDomain!.TrimEnd('/')}/cdn-cgi/access/certs";
+                // Cloudflare publishes proper OIDC discovery at
+                // {TeamDomain}/.well-known/openid-configuration, whose jwks_uri
+                // points at /cdn-cgi/access/certs. Setting Authority lets the
+                // standard configuration manager do the fetching, and — the part
+                // that matters — the refreshing.
+                //
+                // That is not a convenience. Cloudflare rotates these signing keys
+                // every six weeks, honouring the previous one for seven days. Read
+                // them once at startup and the panel works through every test, then
+                // locks out every operator about a month and a half later, with no
+                // code change and nothing in the logs that points at it. The manager
+                // refreshes on a schedule and again on an unrecognised key id, and
+                // throttles that second path so forged key ids cannot turn into a
+                // fetch per request.
+                options.Authority = access.TeamDomain;
 
-                // ConfigurationManager, not a one-time fetch: Cloudflare rotates
-                // these keys every six weeks. See CloudflareAccessKeys for why a
-                // snapshot fails silently, weeks later, at the worst moment.
-                options.ConfigurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
-                    certs, new CloudflareAccessKeys(), new HttpDocumentRetriever());
+                // Keep the token's OWN claim names. JwtBearer otherwise rewrites
+                // short names into the long WS-Federation URIs — `email` becomes
+                // http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress
+                // — so a lookup by "email" silently finds nothing and every
+                // identity is rejected as having no address. The token is valid,
+                // the signature checks out, and the panel refuses everyone.
+                options.MapInboundClaims = false;
 
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
@@ -68,7 +82,13 @@ public static class AuthSetup
                     },
                     OnTokenValidated = context =>
                     {
-                        var email = context.Principal?.FindFirst("email")?.Value;
+                        // Both spellings: MapInboundClaims is off above, so `email`
+                        // arrives as itself — but a future toggle, or a different
+                        // handler, would deliver the mapped URI instead, and this
+                        // failing silently costs an afternoon.
+                        var email = context.Principal?.FindFirst("email")?.Value
+                                    ?? context.Principal?.FindFirst(ClaimTypes.Email)?.Value;
+
                         if (string.IsNullOrWhiteSpace(email)
                             || !access.AllowedEmails.Contains(email, StringComparer.OrdinalIgnoreCase))
                         {
@@ -76,10 +96,19 @@ public static class AuthSetup
                             // common_name and no email. Correct by default; handle
                             // common_name explicitly if automation ever needs in.
                             context.Fail("Not an allowed operator.");
+
+                            // Name the claims that DID arrive. "Rejected (none)"
+                            // says the token had no address, which is
+                            // indistinguishable from the address being read under
+                            // the wrong name — and those need opposite fixes.
+                            var claims = string.Join(", ",
+                                context.Principal?.Claims.Select(c => c.Type) ?? []);
                             context.HttpContext.RequestServices
                                 .GetRequiredService<ILoggerFactory>()
                                 .CreateLogger("ControlPlane.Access")
-                                .LogWarning("Rejected Access identity {Email} — not in Access:AllowedEmails", email ?? "(none)");
+                                .LogWarning(
+                                    "Rejected Access identity {Email} — not in Access:AllowedEmails. Claims present: {Claims}",
+                                    email ?? "(no email claim)", claims);
                             return Task.CompletedTask;
                         }
 

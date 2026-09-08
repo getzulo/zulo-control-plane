@@ -135,12 +135,30 @@ app.MapGet("/health", () => Results.Ok(new
     version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
 })).AllowAnonymous();
 
-// The /api guard is load-bearing. Without it an unmatched API route returns
+// `{*path}` explicitly, NOT the default MapFallback pattern. That default is
+// `{*path:nonfile}`, which refuses to match anything whose last segment contains
+// a dot — so a missing /favicon.ico or a stale /assets/index-abc.js reaches no
+// endpoint at all, the fallback authorization policy applies, and the answer is
+// 401. A missing asset reporting "Unauthorized" sends whoever debugs it hunting
+// an authentication bug that does not exist.
+//
+// The /api guard is load-bearing too. Without it an unmatched API route returns
 // index.html with a 200, so a caller sees HTML where it expected JSON and the
 // dashboard looks empty rather than broken.
-app.MapFallback(async context =>
+app.MapFallback("{*path}", async context =>
 {
-    if (context.Request.Path.StartsWithSegments("/api"))
+    var path = context.Request.Path;
+    if (path.StartsWithSegments("/api"))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    // File-like and not on disk means a MISSING ASSET, not a client-side route.
+    // Serving index.html for it would make a half-built deployment look like a
+    // working one — the browser would get HTML where it asked for JavaScript.
+    var last = path.Value?.Split('/').LastOrDefault();
+    if (last is not null && last.Contains('.'))
     {
         context.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
