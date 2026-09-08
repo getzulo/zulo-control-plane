@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActionIcon, Alert, Badge, Button, Card, Code, Drawer, Group, Loader, Modal,
-  Stack, Table, Text, TextInput, Title, Tooltip,
+  Anchor, Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import {
   IconAlertTriangle, IconFileText, IconPlayerPlay, IconPlayerStop,
   IconPlus, IconRefresh, IconRotate, IconTrash,
 } from '@tabler/icons-react';
 import { api, type FleetHealth, type Tenant } from './api';
+import { useAuth } from './auth';
 
 const STATUS_COLOR: Record<string, string> = {
   Active: 'green', Provisioning: 'blue', Suspended: 'gray', Failed: 'red', Deleting: 'orange',
@@ -15,9 +16,10 @@ const STATUS_COLOR: Record<string, string> = {
 
 const fmt = (value?: string | null) => (value ? new Date(value).toLocaleString() : '—');
 
-/** New-tenant form. Provisioning runs inline and takes minutes, so the dialog
- *  stays open and busy until the backend answers — closing early would hide the
- *  outcome of the thing the operator just started. */
+/** New-tenant form. The API answers 202 as soon as the slug is claimed and builds
+ *  the tenant on a worker, so this closes immediately and the row in the table
+ *  carries the outcome. It used to block for minutes, which meant a proxy timeout
+ *  looked like a failure while the tenant went on to succeed. */
 function NewTenant({ opened, onClose, onCreated }: { opened: boolean; onClose: () => void; onCreated: () => void }) {
   const [slug, setSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -60,8 +62,8 @@ function NewTenant({ opened, onClose, onCreated }: { opened: boolean; onClose: (
         />
         {busy && (
           <Alert color="blue" icon={<Loader size={16} />}>
-            Creating the database, starting the container and waiting for it to boot.
-            First boot runs migrations and a metadata compile — this takes minutes.
+            Claiming the slug. The database, the container and first boot happen on a
+            worker — watch the row's status, it takes a few minutes to reach Active.
           </Alert>
         )}
         {error && <Alert color="red" icon={<IconAlertTriangle size={16} />}>{error}</Alert>}
@@ -75,6 +77,7 @@ function NewTenant({ opened, onClose, onCreated }: { opened: boolean; onClose: (
 }
 
 export default function App() {
+  const auth = useAuth();
   const [fleet, setFleet] = useState<FleetHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +86,7 @@ export default function App() {
   const [logs, setLogs] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<Tenant | null>(null);
   const [confirmText, setConfirmText] = useState('');
+  const [revealed, setRevealed] = useState<{ slug: string; user: string; password: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -107,6 +111,16 @@ export default function App() {
     void refresh();
   };
 
+  // Read-once: the API erases it on the way out, so this is shown in a dialog
+  // rather than a toast that can be missed.
+  const revealPassword = async (tenant: Tenant) => {
+    try {
+      const r = await api.adminPassword(tenant.id);
+      setRevealed({ slug: tenant.slug, user: r.user, password: r.password });
+      void refresh();
+    } catch (e) { setError((e as Error).message); }
+  };
+
   const openLogs = async (tenant: Tenant) => {
     setLogsFor(tenant);
     setLogs('Loading…');
@@ -122,8 +136,18 @@ export default function App() {
           <Text size="sm" c="dimmed">Tenants, their state and what went wrong</Text>
         </div>
         <Group gap="xs">
+          {/* Which door you came through matters when something is wrong: over the
+              tunnel Cloudflare is bypassed entirely, and that is worth seeing. */}
+          {auth.ctx && (
+            <Text size="xs" c="dimmed">
+              {auth.ctx.email ?? 'signed in'} · {auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}
+            </Text>
+          )}
           <Button variant="default" leftSection={<IconRefresh size={14} />} onClick={() => void refresh()}>Refresh</Button>
           <Button leftSection={<IconPlus size={14} />} onClick={() => setCreating(true)}>New tenant</Button>
+          {auth.ctx?.mode === 'local' && (
+            <Button variant="subtle" color="gray" onClick={() => void auth.signOut()}>Sign out</Button>
+          )}
         </Group>
       </Group>
 
@@ -176,7 +200,15 @@ export default function App() {
                     </Badge>
                   </Table.Td>
                   <Table.Td><Code>{t.imageTag}</Code></Table.Td>
-                  <Table.Td><Text size="sm">{t.adminEmail ?? '—'}</Text></Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{t.adminEmail ?? '—'}</Text>
+                    {/* Only ever set when the invitation could not be sent. Without
+                        this the workspace is unreachable by anyone: the password went
+                        nowhere, and the tenant's own one-shot setup is already spent. */}
+                    {t.hasUnreadAdminPassword && (
+                      <Anchor size="xs" onClick={() => void revealPassword(t)}>show one-time password</Anchor>
+                    )}
+                  </Table.Td>
                   <Table.Td><Text size="sm">{fmt(t.createdAt)}</Text></Table.Td>
                   <Table.Td>
                     <Group gap={4} wrap="nowrap" justify="flex-end">
@@ -211,6 +243,20 @@ export default function App() {
           </Table>
         )}
       </Card>
+
+      {/* Shown once and never again — the API erased it on the way out, so a
+          dismissible toast would be a way to lose the only copy. */}
+      <Modal opened={!!revealed} onClose={() => setRevealed(null)} title="One-time administrator password">
+        <Stack gap="sm">
+          <Text size="sm">
+            The invitation could not be sent, so this is the only copy. It has already
+            been erased from the registry — closing this dialog loses it.
+          </Text>
+          <Code block>{revealed && `https://${revealed.slug}.zulo.one
+${revealed.user} / ${revealed.password}`}</Code>
+          <Group justify="flex-end"><Button onClick={() => setRevealed(null)}>I have copied it</Button></Group>
+        </Stack>
+      </Modal>
 
       <NewTenant opened={creating} onClose={() => setCreating(false)} onCreated={() => void refresh()} />
 
