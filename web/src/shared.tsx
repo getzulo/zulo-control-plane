@@ -1,6 +1,50 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Code, Progress, Text } from '@mantine/core';
-import { api, type Job } from './api';
+import { Badge, Code, CopyButton, Group, Progress, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { api, type Health, type Job } from './api';
+
+/**
+ * Which panel build this is — read from the SERVER, never from a compile-time
+ * constant baked into the bundle.
+ *
+ * A constant reports what the JavaScript was built from, and the JavaScript is
+ * served by whatever container happens to be running: after an upgrade a cached
+ * bundle can outlive the binary that shipped it, so the two disagree exactly
+ * when someone is working out which code they were looking at. Asking /health
+ * cannot drift, because the answer comes from the process itself.
+ *
+ * Rendered on the login screen as well as inside the shell — the version matters
+ * most to somebody who cannot get in, and that is the one moment the panel's own
+ * navigation is unavailable.
+ *
+ * Fetched once on mount. It cannot change without a page load, since a new
+ * container means a new bundle.
+ */
+export function BuildStamp() {
+  const [health, setHealth] = useState<Health | null>(null);
+  useEffect(() => { api.health().then(setHealth).catch(() => setHealth(null)); }, []);
+
+  if (!health) return <Text size="xs" c="dimmed">panel — version unavailable</Text>;
+
+  // The whole line, ready to paste into a bug report.
+  const full = `panel ${health.version}${health.build ? ` (${health.build})` : ''}`;
+
+  return (
+    <CopyButton value={full}>
+      {({ copied, copy }) => (
+        <Tooltip label={copied ? 'Copied' : 'Click to copy for a bug report'} withArrow>
+          <UnstyledButton onClick={copy} style={{ overflow: 'hidden', width: '100%' }}>
+            <Group gap={4} wrap="nowrap">
+              <Text size="xs" c="dimmed" truncate>
+                panel <Code fz={10}>{health.version}</Code>
+                {health.build && <> · <Code fz={10}>{health.build}</Code></>}
+              </Text>
+            </Group>
+          </UnstyledButton>
+        </Tooltip>
+      )}
+    </CopyButton>
+  );
+}
 
 /** Absolute time, because an ops panel is read alongside logs and journals. */
 export const fmt = (value?: string | null) => (value ? new Date(value).toLocaleString() : '—');

@@ -172,6 +172,7 @@ jobs:
           set -euo pipefail
           docker build -f src/ZuloOne.ControlPlane/Dockerfile \
             --build-arg VERSION="${{ steps.ver.outputs.version }}" \
+            --build-arg GIT_SHA="${GITHUB_SHA:0:7}" \
             -t "${REGISTRY}/${IMAGE}:${{ steps.ver.outputs.version }}" \
             -t "${REGISTRY}/${IMAGE}:sha-$(git rev-parse --short HEAD)" .
 
@@ -216,6 +217,16 @@ jobs:
           # -p:Version never made it to publish.
           if ! printf '%s' "$body" | tr -d ' ' | grep -q "\"version\":\"${v}\""; then
             echo "::error::/health reports a different version than the image tag ${v}."
+            exit 1
+          fi
+
+          # And the commit did too. This is the half that identifies the CODE:
+          # outside a release the version is 2026.0.<run number>, which says
+          # nothing about what changed. An empty build here means the GIT_SHA
+          # build-arg stopped reaching -p:SourceRevisionId — the same silent
+          # break the version assertion above exists to catch.
+          if ! printf '%s' "$body" | tr -d ' ' | grep -q "\"build\":\"${GITHUB_SHA:0:7}\""; then
+            echo "::error::/health does not report build ${GITHUB_SHA:0:7}. Reported: $body"
             exit 1
           fi
 

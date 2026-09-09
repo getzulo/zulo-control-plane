@@ -4,6 +4,7 @@ import {
 } from '@mantine/core';
 import { api, token } from './api';
 import { useAuth } from './auth';
+import { BuildStamp } from './shared';
 
 /**
  * The break-glass sign-in. Only ever rendered when the SERVER said this request
@@ -119,6 +120,10 @@ export function Login({ enrolled }: { enrolled: boolean }) {
             Confirm enrolment
           </Button>
         )}
+
+        {/* The one screen where the operator is most likely to be reporting a
+            problem and least able to find the version any other way. */}
+        <BuildStamp />
       </Stack>
     </Card>
   );

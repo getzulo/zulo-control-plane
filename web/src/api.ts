@@ -6,6 +6,20 @@ const BASE = import.meta.env.VITE_API_BASE ?? '';
 export type TenantStatus = 'Provisioning' | 'Active' | 'Suspended' | 'Failed' | 'Deleting';
 export type TenantHealth = 'Unknown' | 'Ok' | 'Down';
 
+/**
+ * What the running panel process says it is. Read from the server rather than
+ * baked into the bundle: a cached bundle can outlive the binary that served it,
+ * and the two would then disagree exactly when someone needs to know which code
+ * they were looking at.
+ */
+export interface Health {
+  status: string;
+  version: string;
+  /** Short git sha, or empty for a build made without one. */
+  build: string;
+  startedUtc: string;
+}
+
 export interface Tenant {
   id: string;
   slug: string;
@@ -148,8 +162,7 @@ export interface Snapshot {
   onDisk: boolean;
 }
 
-export interface ImageTag {
-  tag: string;
+export interface ImageTag {  tag: string;
   image: string;
   inUseBy: string[];
   isDefault: boolean;
@@ -238,6 +251,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /**
+   * What this panel binary is. Anonymous, so the stamp renders on the login
+   * screen too — the version matters most to somebody who cannot get in.
+   */
+  health: () => request<Health>('/health'),
+
   /** ASKED on every boot, never inferred. See auth.tsx. */
   context: () => request<AuthContext>('/api/auth/context'),
 

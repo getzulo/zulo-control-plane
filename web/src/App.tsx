@@ -5,6 +5,7 @@ import {
   IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconPackages, IconServer2,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
+import { BuildStamp } from './shared';
 import { OverviewPage, ActivityPage } from './Overview';
 import { TenantsPage } from './Tenants';
 import { TenantPage } from './Tenant';
@@ -75,8 +76,11 @@ export default function App() {
             );
           })}
         </ScrollArea>
+        {/* Pinned to the bottom of the sidebar, on every screen. A bug report
+            that names a screen but not a build is a bug report nobody can act
+            on, and asking for it after the fact never works. */}
+        <BuildStamp />
       </AppShell.Navbar>
-
       <AppShell.Main>
         <Routes>
           <Route path="/" element={<OverviewPage />} />

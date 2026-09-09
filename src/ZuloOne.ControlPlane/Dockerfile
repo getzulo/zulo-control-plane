@@ -49,8 +49,13 @@ COPY src/ ./src/
 # Declared AFTER restore on purpose: an ARG invalidates every layer below it, so
 # a version bump reuses the restore instead of redoing it.
 ARG VERSION=0.0.0
+# The commit. MSBuild appends it to InformationalVersion as `+<sha>`, which is
+# what AppBuild reads back. The version alone cannot identify the code: outside a
+# release it is 2026.0.<CI run number>, and a run number says nothing about what
+# changed.
+ARG GIT_SHA=""
 RUN dotnet publish src/ZuloOne.ControlPlane/ZuloOne.ControlPlane.csproj -c Release \
-    -o /app/publish --no-restore -p:Version=$VERSION
+    -o /app/publish --no-restore -p:Version=$VERSION -p:SourceRevisionId=$GIT_SHA
 
 # ------------------------------------------------------------- RUNTIME -----
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final

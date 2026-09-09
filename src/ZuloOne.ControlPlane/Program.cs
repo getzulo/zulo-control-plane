@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
+using ZuloOne.ControlPlane;
 using ZuloOne.ControlPlane.Auth;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
@@ -161,7 +162,12 @@ app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
-    version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
+    version = AppBuild.Version,
+    // The commit, because the version alone does not identify the code: outside a
+    // release the panel's version is 2026.0.<CI run number>, and a run number says
+    // nothing about what changed. This is what a bug report needs to carry.
+    build = AppBuild.Revision,
+    startedUtc = AppBuild.StartedUtc,
 })).AllowAnonymous();
 
 // `{*path}` explicitly, NOT the default MapFallback pattern. That default is
