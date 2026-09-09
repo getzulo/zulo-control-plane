@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { Center, Loader, MantineProvider, Stack, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
+import { theme } from './theme';
+import './theme.css';
 import App from './App.tsx';
 import { Login } from './Login.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
@@ -53,7 +55,11 @@ function Root() {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <MantineProvider defaultColorScheme="auto">
+    {/* Light by default rather than following the OS. This is read next to a
+        terminal and a Grafana tab, and "auto" made the panel dark on most
+        machines — which is a legitimate taste, but not the one the layout was
+        drawn for. The toggle in the header keeps the other. */}
+    <MantineProvider theme={theme} defaultColorScheme="light">
       <AuthProvider>
         <Root />
       </AuthProvider>

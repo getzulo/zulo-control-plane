@@ -1,0 +1,58 @@
+/*
+ * Only what a theme object cannot say.
+ *
+ * Mantine's theme covers components; these are the surfaces around them — the
+ * canvas the cards sit on, and the two hairlines that separate the shell from
+ * the content. Written as CSS variables so light and dark stay in one place
+ * instead of being branched on in every component.
+ */
+
+:root {
+  /* A canvas that is not white. White cards on a white page have to be outlined
+     to exist at all; a barely-tinted background lets a hairline border do it. */
+  --zo-canvas: #f7f8fb;
+  --zo-surface: #ffffff;
+  --zo-hairline: rgba(16, 24, 40, 0.08);
+}
+
+[data-mantine-color-scheme='dark'] {
+  --zo-canvas: #14161a;
+  --zo-surface: #1a1c21;
+  --zo-hairline: rgba(255, 255, 255, 0.08);
+}
+
+body {
+  background: var(--zo-canvas);
+}
+
+/* The shell reads as one continuous surface with the content floating on it,
+   which is what makes a dense ops panel feel calm rather than boxed-in. */
+.mantine-AppShell-header,
+.mantine-AppShell-navbar {
+  background: var(--zo-surface);
+  border-color: var(--zo-hairline);
+}
+
+.mantine-AppShell-main {
+  background: var(--zo-canvas);
+}
+
+/* Tables: rules between rows, not around every cell. The border-heavy default
+   competes with the card that already contains it. */
+.mantine-Table-table tbody tr td {
+  border-color: var(--zo-hairline);
+}
+
+.mantine-Table-table thead tr th {
+  border-color: var(--zo-hairline);
+  font-weight: 550;
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2));
+}
+
+/* Card headings sit closer to their content than Mantine's default rhythm. */
+.mantine-Card-root > .mantine-Text-root:first-child {
+  letter-spacing: -0.005em;
+}

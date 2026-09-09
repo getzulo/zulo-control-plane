@@ -1,9 +1,12 @@
 import { NavLink as RouterNavLink, Route, Routes, useLocation } from 'react-router-dom';
-import { AppShell, Badge, Burger, Group, NavLink, ScrollArea, Text, UnstyledButton } from '@mantine/core';
+import {
+  ActionIcon, AppShell, Badge, Burger, Group, NavLink, ScrollArea, Text, ThemeIcon, Tooltip,
+  UnstyledButton, useMantineColorScheme,
+} from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
-  IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconPackages,
-  IconServer2, IconSettings,
+  IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconMoon,
+  IconPackages, IconServer2, IconSettings, IconSun,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp } from './shared';
@@ -25,25 +28,41 @@ const NAV = [
   { to: '/settings', label: 'Settings', icon: IconSettings, end: false },
 ];
 
-export default function App() {
-  const auth = useAuth();
+/**
+ * Light is the default, but an ops panel gets read at 3am too. The choice is
+ * Mantine's own, so it persists and applies before first paint.
+ */
+function ColorSchemeToggle() {
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+  const dark = colorScheme === 'dark';
+  return (
+    <Tooltip label={dark ? 'Light' : 'Dark'}>
+      <ActionIcon variant="subtle" color="gray" onClick={toggleColorScheme} aria-label="Toggle colour scheme">
+        {dark ? <IconSun size={17} /> : <IconMoon size={17} />}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
+export default function App() {  const auth = useAuth();
   const [opened, { toggle, close }] = useDisclosure();
   const location = useLocation();
 
   return (
     <AppShell
-      header={{ height: 52 }}
-      navbar={{ width: 220, breakpoint: 'sm', collapsed: { mobile: !opened } }}
-      padding="md"
+      header={{ height: 56 }}
+      navbar={{ width: 232, breakpoint: 'sm', collapsed: { mobile: !opened } }}
+      padding="lg"
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Group gap="sm">
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-            <Text fw={700}>ZuloOne</Text>
-            <Badge variant="light" size="sm">control plane</Badge>
+            <ThemeIcon size={26} radius="md" variant="light"><IconCloudComputing size={16} /></ThemeIcon>
+            <Text fw={650} style={{ letterSpacing: '-0.01em' }}>ZuloOne</Text>
+            <Badge size="sm">control plane</Badge>
           </Group>
-          <Group gap="sm">
+          <Group gap="xs">
             {/* Which door you came through matters when something is wrong: over the
                 tunnel Cloudflare is bypassed entirely, and that is worth seeing. */}
             {auth.ctx && (
@@ -51,6 +70,7 @@ export default function App() {
                 {auth.ctx.email ?? 'signed in'} · {auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}
               </Text>
             )}
+            <ColorSchemeToggle />
             {auth.ctx?.mode === 'local' && (
               <UnstyledButton onClick={() => void auth.signOut()} title="Sign out">
                 <IconLogout size={18} />
