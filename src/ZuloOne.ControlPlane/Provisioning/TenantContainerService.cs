@@ -80,6 +80,14 @@ public sealed class TenantContainerService
         // retryable after a failure, not blocked by its own leftovers.
         await RemoveAsync(name, ct);
 
+        // The image must be on THIS daemon. CreateContainerAsync does not pull, and
+        // the failure is a bare
+        //   Docker API responded with status code=NotFound, No such image: …
+        // AFTER the old container has already been removed — which is how an
+        // upgrade to a freshly published tag took a live tenant down instead of
+        // failing before touching it.
+        await EnsureImageAsync(tenant.ImageTag, ct);
+
         var created = await _docker.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Name = name,
@@ -144,6 +152,46 @@ public sealed class TenantContainerService
         var match = containers.FirstOrDefault(c =>
             c.Names.Any(n => string.Equals(n.TrimStart('/'), name, StringComparison.Ordinal)));
         return match is null ? null : (match.ID, match.Image);
+    }
+
+    /// <summary>
+    /// Makes sure the image is on this daemon, pulling it if not.
+    ///
+    /// <para>
+    /// Inspect FIRST, pull only when missing — not pull-always. Tenants pin
+    /// immutable release tags, so a tag that is already here is by definition the
+    /// right content; pulling anyway would add a registry round trip to every
+    /// container start and would make the registry being down enough to stop a
+    /// tenant that needs nothing from it.
+    /// </para>
+    /// </summary>
+    private async Task EnsureImageAsync(string image, CancellationToken ct)
+    {
+        try
+        {
+            await _docker.Images.InspectImageAsync(image, ct);
+            return;
+        }
+        catch (DockerImageNotFoundException) { /* fall through and pull */ }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+
+        // `repo:tag`, splitting on the LAST colon — the registry host carries one
+        // too (10.10.0.210:5000/zuloone-core:2026.0.30), and splitting on the first
+        // would try to pull a tag called "5000/zuloone-core".
+        var colon = image.LastIndexOf(':');
+        var slash = image.LastIndexOf('/');
+        var (repo, tag) = colon > slash
+            ? (image[..colon], image[(colon + 1)..])
+            : (image, "latest");
+
+        _logger.LogInformation("Pulling {Image} — not present on this daemon", image);
+        await _docker.Images.CreateImageAsync(
+            new ImagesCreateParameters { FromImage = repo, Tag = tag },
+            authConfig: null,
+            // The daemon streams progress; nothing here needs it, but the overload
+            // requires a sink and a null one throws.
+            progress: new Progress<JSONMessage>(),
+            cancellationToken: ct);
     }
 
     public async Task StopAsync(string containerId, CancellationToken ct = default)

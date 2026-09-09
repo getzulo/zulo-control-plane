@@ -81,14 +81,32 @@ public sealed class UpgradeJobHandler : IJobHandler
         tenant.ImageTag = payload.ImageTag;
         var connectionString = _databases.TenantConnectionString(
             tenant.DatabaseName!, tenant.DatabaseRole!, tenant.DatabasePassword ?? string.Empty);
-        // RunAsync removes a container of the same name first, so this replaces the
-        // running one rather than colliding with it.
-        tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
-        await _db.SaveChangesAsync(ct);
 
-        await context.StepAsync($"Waiting for {tenant.Slug} on the new image", 65, ct);
-        var ready = await _health.WaitUntilReadyAsync(
-            _containers.HostFor(tenant.Slug), TimeSpan.FromSeconds(_fleet.ReadinessTimeoutSeconds), ct);
+        // The recreate AND the health gate are inside one try.
+        //
+        // They were not, and the rollback sat inside `if (!ready)` — so it covered
+        // "started but unhealthy" and not "did not start at all". When a pull was
+        // missing and CreateContainer threw NotFound, the exception went straight
+        // past the rollback to the worker: RunAsync had already removed the old
+        // container, so the tenant was left with NONE and served 404 until a human
+        // noticed. Measured, on a live tenant.
+        var ready = false;
+        try
+        {
+            // RunAsync removes a container of the same name first, so this replaces
+            // the running one rather than colliding with it.
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
+            await _db.SaveChangesAsync(ct);
+
+            await context.StepAsync($"Waiting for {tenant.Slug} on the new image", 65, ct);
+            ready = await _health.WaitUntilReadyAsync(
+                _containers.HostFor(tenant.Slug), TimeSpan.FromSeconds(_fleet.ReadinessTimeoutSeconds), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await context.LogAsync($"Could not bring {tenant.Slug} up on {payload.ImageTag}: {ex.Message}", CancellationToken.None);
+            ready = false;
+        }
 
         if (!ready)
         {
