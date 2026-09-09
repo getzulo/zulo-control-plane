@@ -89,8 +89,22 @@ jobs:
           # Vite 8 requires 20.19+/22.12+; pin the major rather than discover the
           # floor from a build failure.
           node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          # NO `cache: npm`, deliberately, and it is worth being explicit about why
+          # because the option looks free.
+          #
+          # actions/cache ships the cache to GitHub over the internet. On this
+          # SELF-HOSTED runner that meant packing 103 MB and uploading it at
+          # ~0.3 MB/sec in the post-job step:
+          #
+          #     npm ci            3s
+          #     npm run build     2s
+          #     npm run lint      0s
+          #     Post setup-node   5m 32s   <-- cache save
+          #
+          # 466s for the job against 14s for backend-gate and 46s for the image.
+          # And it bought nothing: ~/.npm already persists on the runner's own disk
+          # between runs, which is exactly why `npm ci` finishes in three seconds.
+          # The cache was uploading a copy of something that never left.
 
       - run: npm ci --no-audit --no-fund
       - run: npm run build
