@@ -96,6 +96,7 @@ builder.Services.AddScoped<TenantProvisioner>();
 builder.Services.AddSingleton<JobChannel>();
 builder.Services.AddScoped<IJobQueue, JobQueue>();
 builder.Services.AddScoped<IJobHandler, ProvisionJobHandler>();
+builder.Services.AddScoped<IJobHandler, AdoptJobHandler>();
 builder.Services.AddScoped<IJobHandler, SnapshotJobHandler>();
 builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
 builder.Services.AddScoped<IJobHandler, SwapJobHandler>();

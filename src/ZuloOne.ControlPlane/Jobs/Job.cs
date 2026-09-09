@@ -6,6 +6,12 @@ public enum JobKind
     /// <summary>Build a registered tenant: database → container → ready → admin.</summary>
     Provision,
 
+    /// <summary>
+    /// Bring a hand-deployed tenant under management: take over its credentials,
+    /// grant the panel access, recreate its container from the registry.
+    /// </summary>
+    Adopt,
+
     /// <summary>Logical <c>pg_dump</c> of one tenant, kept as a restore point.</summary>
     Snapshot,
 

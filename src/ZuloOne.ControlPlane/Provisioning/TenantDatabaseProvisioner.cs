@@ -244,6 +244,43 @@ public sealed class TenantDatabaseProvisioner
         => ExecuteAsync(admin,
             $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
 
+    /// <summary>
+    /// Replaces a tenant role's password and returns the new one.
+    ///
+    /// Used when adopting a tenant the panel did not create: the old password was
+    /// never recorded, so there is nothing to take over — only to replace. Every
+    /// connection using the old one keeps working until it reconnects, which is why
+    /// the caller recreates the container immediately afterwards.
+    /// </summary>
+    public async Task<string> ResetPasswordAsync(string role, CancellationToken ct = default)
+    {
+        var password = GeneratePassword();
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+        await ExecuteAsync(admin, $"ALTER ROLE \"{role}\" WITH LOGIN PASSWORD '{password.Replace("'", "''")}'", ct);
+        return password;
+    }
+
+    /// <summary>
+    /// Gives the control plane what it would have had if it had created this tenant
+    /// itself: membership in the tenant's role, and CONNECT by name rather than
+    /// through PUBLIC.
+    ///
+    /// Both are needed and for different reasons. Without membership pg_dump reads
+    /// nothing and reports success, producing an empty backup. Without the explicit
+    /// CONNECT, revoking PUBLIC's — which is what stops one tenant opening a session
+    /// against another's database — would lock the panel out of this one.
+    /// </summary>
+    public async Task AdoptGrantsAsync(string database, string role, CancellationToken ct = default)
+    {
+        var adminUser = _settings.AdminUser.Replace("\"", "\"\"");
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+        await ExecuteAsync(admin, $"GRANT \"{role}\" TO \"{adminUser}\"", ct);
+        await ExecuteAsync(admin, $"REVOKE CONNECT ON DATABASE \"{database}\" FROM PUBLIC", ct);
+        await ExecuteAsync(admin, $"GRANT CONNECT ON DATABASE \"{database}\" TO \"{adminUser}\"", ct);
+    }
+
     /// <summary>Drops one database outright — the explicit discard of a kept copy.</summary>
     public async Task DropDatabaseAsync(string database, CancellationToken ct = default)
     {

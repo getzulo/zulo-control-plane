@@ -10,6 +10,15 @@ namespace ZuloOne.ControlPlane.Api;
 public record CreateTenantRequest(string Slug, string? DisplayName, string AdminEmail, string? ImageTag, string? Plan);
 
 /// <summary>
+/// What an operator supplies to adopt a hand-deployed tenant. Everything but the
+/// slug is inferred: the database and role from the naming convention, the image
+/// and container id from what is actually running.
+/// </summary>
+public record AdoptTenantRequest(
+    string Slug, string? DisplayName, string? AdminEmail,
+    string? DatabaseName, string? DatabaseRole, string? ImageTag, string? ContainerName);
+
+/// <summary>
 /// The fleet API behind the dashboard: provision, inspect and control tenants.
 /// Destructive by nature — it creates and drops databases and containers — so it
 /// belongs behind operator authentication before this is exposed anywhere real.
@@ -100,8 +109,65 @@ public class TenantsController : ControllerBase
         }
     }
 
-    [HttpPost("{id:guid}/stop")]
-    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>
+    /// <summary>
+    /// Brings a tenant that was deployed by hand under management.
+    ///
+    /// <para>
+    /// It already has a database, a role and a running container; what it lacks is a
+    /// registry row, which is why it is invisible in the fleet list and excluded
+    /// from snapshots, restores and upgrades. Adoption creates the row, takes over
+    /// the database credentials — the old password was never recorded, so there is
+    /// nothing to keep — and recreates the container from that row.
+    /// </para>
+    ///
+    /// <para>
+    /// Signed-in users of that tenant are logged out: the container comes back with
+    /// a signing key the registry holds, and the previous one exists nowhere.
+    /// </para>
+    /// </summary>
+    [HttpPost("adopt")]
+    public async Task<IActionResult> Adopt([FromBody] AdoptTenantRequest request, CancellationToken ct)
+    {
+        if (!TenantProvisioner.IsValidSlug(request.Slug))
+            return BadRequest(new { error = "Slug must be a DNS label: lowercase letters, digits and dashes." });
+
+        var slug = request.Slug.Trim().ToLowerInvariant();
+        if (await _db.Tenants.AnyAsync(t => t.Slug == slug, ct))
+            return Conflict(new { error = $"'{slug}' is already in the registry." });
+
+        var database = string.IsNullOrWhiteSpace(request.DatabaseName) ? $"tenant_{slug}" : request.DatabaseName!.Trim();
+        var role = string.IsNullOrWhiteSpace(request.DatabaseRole) ? $"tenant_{slug}" : request.DatabaseRole!.Trim();
+
+        var found = await _containers.FindByNameAsync($"zuloone-tenant-{slug}", ct)
+                 ?? await _containers.FindByNameAsync(request.ContainerName ?? string.Empty, ct);
+        if (found is null)
+            return NotFound(new { error = $"No container found for '{slug}'. Pass containerName if it is named differently." });
+        var container = found.Value;
+
+        var tenant = new Tenant
+        {
+            Slug = slug,
+            DisplayName = request.DisplayName,
+            AdminEmail = request.AdminEmail,
+            DatabaseName = database,
+            DatabaseRole = role,
+            // Taken from what is actually RUNNING, not from the fleet default: an
+            // adoption must not silently move the tenant to another version.
+            ImageTag = string.IsNullOrWhiteSpace(request.ImageTag) ? container.Image : request.ImageTag!,
+            ContainerId = container.Id,
+            Status = TenantStatus.Provisioning,
+            JwtSigningKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48)),
+        };
+        _db.Tenants.Add(tenant);
+        await _db.SaveChangesAsync(ct);
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Adopt, tenant.Id, tenant.Slug,
+            createdBy: User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value, ct: ct);
+        return Accepted($"/api/tenants/{tenant.Id}", new { tenant = Summary(tenant), jobId = job.Id });
+    }
+
+    [HttpPost("{id:guid}/stop")]    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>
     {
         await _containers.StopAsync(tenant.ContainerId!, ct);
         tenant.Status = TenantStatus.Suspended;

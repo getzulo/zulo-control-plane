@@ -107,6 +107,32 @@ public sealed class TenantContainerService
         return created.ID;
     }
 
+    /// <summary>
+    /// Finds a running or stopped container by exact name, or null.
+    ///
+    /// Used when adopting a tenant the panel did not create: its container id has to
+    /// come from the daemon, because nothing in the registry has ever recorded it.
+    /// </summary>
+    public async Task<(string Id, string Image)?> FindByNameAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        var containers = await _docker.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = true,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["name"] = new Dictionary<string, bool> { [name] = true },
+            },
+        }, ct);
+
+        // Docker's name filter is a SUBSTRING match, so "zuloone-tenant-t1" also
+        // returns "zuloone-tenant-t100". Compare exactly; names carry a leading '/'.
+        var match = containers.FirstOrDefault(c =>
+            c.Names.Any(n => string.Equals(n.TrimStart('/'), name, StringComparison.Ordinal)));
+        return match is null ? null : (match.ID, match.Image);
+    }
+
     public async Task StopAsync(string containerId, CancellationToken ct = default)
         => await _docker.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 30 }, ct);
 
