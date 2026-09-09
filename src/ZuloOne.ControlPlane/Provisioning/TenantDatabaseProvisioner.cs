@@ -59,18 +59,54 @@ public sealed class TenantDatabaseProvisioner
         // with 42710 "role already exists", which reads as a duplicate-tenant error
         // rather than debris from the previous attempt.
         var roleCreated = false;
+        var databaseCreated = false;
         try
         {
             await ExecuteAsync(admin, $"CREATE ROLE \"{role}\" WITH LOGIN PASSWORD '{password.Replace("'", "''")}'", ct);
             roleCreated = true;
             await ExecuteAsync(admin, $"CREATE DATABASE \"{database}\" OWNER \"{role}\"", ct);
+            databaseCreated = true;
+
+            var adminUser = _settings.AdminUser.Replace("\"", "\"\"");
+
+            // Membership stated OUTRIGHT rather than inherited from the GUC above.
+            // createrole_self_grant already grants it as a side effect, which is
+            // precisely the problem: it only fires for roles the control plane
+            // created itself. The first tenant was made by hand, so the panel could
+            // read 0 of its 109 tables — and pg_dump against it produces an EMPTY
+            // backup rather than an error. A backup feature resting on a side effect
+            // passes acceptance on a provisioned tenant and fails silently on the
+            // one that was not.
+            await ExecuteAsync(admin, $"GRANT \"{role}\" TO \"{adminUser}\"", ct);
+
+            // PUBLIC keeps CONNECT on a new database by default, so without this
+            // every tenant role can open a session against every OTHER tenant's
+            // database, and against the registry — which stores each tenant's
+            // database password and JWT signing key in plaintext. Table grants stop
+            // it reading rows, but the catalogue stays enumerable, and ZuloOne runs
+            // tenant-authored scripts.
+            //
+            // The owner keeps CONNECT through ownership, so the tenant itself is
+            // unaffected; only the panel needs it restored by name.
+            await ExecuteAsync(admin, $"REVOKE CONNECT ON DATABASE \"{database}\" FROM PUBLIC", ct);
+            await ExecuteAsync(admin, $"GRANT CONNECT ON DATABASE \"{database}\" TO \"{adminUser}\"", ct);
         }
         catch
         {
+            // CancellationToken.None throughout: the cleanup must not be skipped
+            // because the thing that failed was a cancellation.
+            if (databaseCreated)
+            {
+                try { await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{database}\"", CancellationToken.None); }
+                catch (Exception cleanup)
+                {
+                    _logger.LogError(cleanup,
+                        "Could not drop database {Database} after a failed create — a retry of this slug will report that it already exists",
+                        database);
+                }
+            }
             if (roleCreated)
             {
-                // CancellationToken.None: the cleanup must not be skipped because
-                // the thing that failed was a cancellation.
                 try { await ExecuteAsync(admin, $"DROP ROLE IF EXISTS \"{role}\"", CancellationToken.None); }
                 catch (Exception cleanup)
                 {
