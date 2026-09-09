@@ -36,7 +36,7 @@ public sealed class UpgradeJobHandler : IJobHandler
     private readonly TenantDatabaseProvisioner _databases;
     private readonly PgTools _pg;
     private readonly SnapshotSettings _snapshots;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
 
     public UpgradeJobHandler(
         ControlPlaneDbContext db,
@@ -45,7 +45,7 @@ public sealed class UpgradeJobHandler : IJobHandler
         TenantDatabaseProvisioner databases,
         PgTools pg,
         IOptions<SnapshotSettings> snapshots,
-        IOptions<FleetSettings> fleet)
+        FleetConfig fleet)
     {
         _db = db;
         _containers = containers;
@@ -53,7 +53,7 @@ public sealed class UpgradeJobHandler : IJobHandler
         _databases = databases;
         _pg = pg;
         _snapshots = snapshots.Value;
-        _fleet = fleet.Value;
+        _fleet = fleet;
     }
 
     public JobKind Kind => JobKind.Upgrade;

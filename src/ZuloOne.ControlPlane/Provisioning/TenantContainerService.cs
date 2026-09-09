@@ -14,13 +14,13 @@ namespace ZuloOne.ControlPlane.Provisioning;
 public sealed class TenantContainerService
 {
     private readonly IDockerClient _docker;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
     private readonly ILogger<TenantContainerService> _logger;
 
-    public TenantContainerService(IDockerClient docker, IOptions<FleetSettings> fleet, ILogger<TenantContainerService> logger)
+    public TenantContainerService(IDockerClient docker, FleetConfig fleet, ILogger<TenantContainerService> logger)
     {
         _docker = docker;
-        _fleet = fleet.Value;
+        _fleet = fleet;
         _logger = logger;
     }
 
@@ -74,6 +74,12 @@ public sealed class TenantContainerService
             "ASPNETCORE_ENVIRONMENT=Production",
             $"ZuloOne__BehindReverseProxy={_fleet.BehindReverseProxy.ToString().ToLowerInvariant()}",
             $"ZuloOne__PublicUrl=https://{host}",
+            // Which business-layer models this tenant installs from the bundles its
+            // image carries. Read on every boot by PackageInstaller, so an upgrade
+            // to an image with newer models applies them without anything else
+            // happening — and a tenant that bought accounting does not silently
+            // acquire payroll because it shipped in the same file.
+            $"ZuloOne__Packages__Install={_fleet.Packages}",
         };
 
         // Remove a stale container of the same name first — provisioning must be

@@ -23,15 +23,15 @@ public class ImagesController : ControllerBase
     private readonly ControlPlaneDbContext _db;
     private readonly IHttpClientFactory _http;
     private readonly IJobQueue _queue;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
 
     public ImagesController(
-        ControlPlaneDbContext db, IHttpClientFactory http, IJobQueue queue, IOptions<FleetSettings> fleet)
+        ControlPlaneDbContext db, IHttpClientFactory http, IJobQueue queue, FleetConfig fleet)
     {
         _db = db;
         _http = http;
         _queue = queue;
-        _fleet = fleet.Value;
+        _fleet = fleet;
     }
 
     /// <summary>

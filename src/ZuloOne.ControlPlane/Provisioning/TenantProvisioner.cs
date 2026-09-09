@@ -27,7 +27,7 @@ public sealed class TenantProvisioner
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
     private readonly TenantInviteService _invites;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
     private readonly ILogger<TenantProvisioner> _logger;
 
     public TenantProvisioner(
@@ -36,7 +36,7 @@ public sealed class TenantProvisioner
         TenantContainerService containers,
         TenantHealthProbe health,
         TenantInviteService invites,
-        IOptions<FleetSettings> fleet,
+        FleetConfig fleet,
         ILogger<TenantProvisioner> logger)
     {
         _db = db;
@@ -44,7 +44,7 @@ public sealed class TenantProvisioner
         _containers = containers;
         _health = health;
         _invites = invites;
-        _fleet = fleet.Value;
+        _fleet = fleet;
         _logger = logger;
     }
 

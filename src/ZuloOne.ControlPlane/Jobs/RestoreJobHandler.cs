@@ -41,7 +41,7 @@ public sealed class RestoreJobHandler : IJobHandler
     private readonly TenantHealthProbe _health;
     private readonly PgTools _pg;
     private readonly SnapshotSettings _snapshots;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
 
     public RestoreJobHandler(
         ControlPlaneDbContext db,
@@ -50,7 +50,7 @@ public sealed class RestoreJobHandler : IJobHandler
         TenantHealthProbe health,
         PgTools pg,
         IOptions<SnapshotSettings> snapshots,
-        IOptions<FleetSettings> fleet)
+        FleetConfig fleet)
     {
         _db = db;
         _databases = databases;
@@ -58,7 +58,7 @@ public sealed class RestoreJobHandler : IJobHandler
         _health = health;
         _pg = pg;
         _snapshots = snapshots.Value;
-        _fleet = fleet.Value;
+        _fleet = fleet;
     }
 
     public JobKind Kind => JobKind.Restore;

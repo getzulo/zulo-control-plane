@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
-  Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title, Tooltip,
+  Alert, Anchor, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title,
+  Tooltip,
 } from '@mantine/core';
 import { IconAlertTriangle, IconArrowUp, IconRocket, IconTrash } from '@tabler/icons-react';
 import { api, type ImageTag, type Images, type Tenant } from './api';
@@ -131,7 +133,9 @@ export function ImagesPage() {
         <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
           The newest release is <Code>{newest?.tag}</Code>, but new tenants are created on{' '}
           <Code>{images?.defaultImage?.split(':').pop()}</Code>. The next customer would start on older code than the
-          fleet already runs — change <Code>Fleet__DefaultImage</Code>.
+          fleet already runs — change it under{' '}
+          <Anchor component={Link} to="/settings">Settings → Fleet and provisioning</Anchor>. It takes effect on the
+          next tenant; nothing already running is moved.
         </Alert>
       )}
 

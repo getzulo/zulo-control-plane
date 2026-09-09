@@ -168,8 +168,9 @@ public static class SettingsCatalog
         new("Fleet:AdditionalReservedSlugs", Fleet,
             "Extra reserved subdomains",
             "Names no customer may take, on top of the compiled-in baseline. This list can only "
-            + "ADD: emptying it cannot hand anyone 'admin'.",
-            SettingKind.TextList, ""),
+            + "ADD: emptying it cannot hand anyone 'admin'. Read once at startup, so a change here "
+            + "applies to the panel's next run.",
+            SettingKind.TextList, "", RuntimeEditable: false),
 
         new("Fleet:Packages", Fleet,
             "Models installed on a new tenant",

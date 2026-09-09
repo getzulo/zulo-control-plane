@@ -29,20 +29,20 @@ public sealed class SwapJobHandler : IJobHandler
     private readonly TenantDatabaseProvisioner _databases;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
-    private readonly FleetSettings _fleet;
+    private readonly FleetConfig _fleet;
 
     public SwapJobHandler(
         ControlPlaneDbContext db,
         TenantDatabaseProvisioner databases,
         TenantContainerService containers,
         TenantHealthProbe health,
-        IOptions<FleetSettings> fleet)
+        FleetConfig fleet)
     {
         _db = db;
         _databases = databases;
         _containers = containers;
         _health = health;
-        _fleet = fleet.Value;
+        _fleet = fleet;
     }
 
     public JobKind Kind => JobKind.Swap;

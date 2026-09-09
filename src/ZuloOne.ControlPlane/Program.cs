@@ -60,6 +60,10 @@ builder.Services.AddDbContext<ControlPlaneDbContext>(options =>
             "Connection string 'ControlPlane' is required — it is where the fleet is recorded.")));
 
 builder.Services.Configure<FleetSettings>(builder.Configuration.GetSection("Fleet"));
+// Read through this, not through IOptions<FleetSettings>: the bound options are
+// frozen at startup, and the settings screen writes to a table. Singleton because
+// it holds no state of its own — both of its sources are singletons.
+builder.Services.AddSingleton<FleetConfig>();
 builder.Services.Configure<TenantDatabaseSettings>(builder.Configuration.GetSection("TenantDatabase"));
 builder.Services.Configure<ControlPlaneMailSettings>(builder.Configuration.GetSection("Mail"));
 builder.Services.Configure<PatroniSettings>(builder.Configuration.GetSection("Patroni"));
