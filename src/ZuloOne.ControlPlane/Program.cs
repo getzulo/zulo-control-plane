@@ -99,7 +99,11 @@ builder.Services.AddScoped<IJobHandler, ProvisionJobHandler>();
 builder.Services.AddScoped<IJobHandler, SnapshotJobHandler>();
 builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
 builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
+builder.Services.AddScoped<IJobHandler, UpgradeJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
+
+// The image registry is plain HTTP on the LAN and answers instantly or not at all.
+builder.Services.AddHttpClient("registry", client => client.Timeout = TimeSpan.FromSeconds(8));
 
 // pg_dump / pg_restore, run as child processes. A logical dump needs no shell on a
 // database node: the panel already routes to Postgres and reads every tenant it
