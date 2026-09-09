@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ZuloOne.ControlPlane.Registry;
@@ -11,9 +12,11 @@ using ZuloOne.ControlPlane.Registry;
 namespace ZuloOne.ControlPlane.Registry.Migrations
 {
     [DbContext(typeof(ControlPlaneDbContext))]
-    partial class ControlPlaneDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909025139_AddJobs")]
+    partial class AddJobs
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -99,31 +102,6 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                         .IsUnique();
 
                     b.ToTable("OperatorSessions");
-                });
-
-            modelBuilder.Entity("ZuloOne.ControlPlane.Infra.NodeHealth", b =>
-                {
-                    b.Property<string>("Node")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTime>("CheckedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("ReceivedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Report")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.HasKey("Node");
-
-                    b.ToTable("NodeHealth");
                 });
 
             modelBuilder.Entity("ZuloOne.ControlPlane.Jobs.Job", b =>

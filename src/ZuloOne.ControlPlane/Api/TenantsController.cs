@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -22,7 +23,7 @@ public class TenantsController : ControllerBase
     private readonly TenantProvisioner _provisioner;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
-    private readonly IProvisioningQueue _queue;
+    private readonly IJobQueue _queue;
     private readonly ILogger<TenantsController> _logger;
 
     public TenantsController(
@@ -30,7 +31,7 @@ public class TenantsController : ControllerBase
         TenantProvisioner provisioner,
         TenantContainerService containers,
         TenantHealthProbe health,
-        IProvisioningQueue queue,
+        IJobQueue queue,
         ILogger<TenantsController> logger)
     {
         _db = db;
@@ -79,9 +80,14 @@ public class TenantsController : ControllerBase
             // lifetime is the service's, not this request's.
             var tenant = await _provisioner.RegisterAsync(
                 request.Slug, request.DisplayName, request.AdminEmail, request.ImageTag, request.Plan, ct);
-            _queue.Enqueue(tenant.Id);
 
-            return Accepted($"/api/tenants/{tenant.Id}", Summary(tenant));
+            var job = await _queue.EnqueueAsync(
+                JobKind.Provision, tenant.Id, tenant.Slug,
+                createdBy: User.Identity?.Name ?? User.FindFirst("email")?.Value, ct: ct);
+
+            // The job id rides along so the caller can follow the build without
+            // polling the tenant row and guessing which attempt it is watching.
+            return Accepted($"/api/tenants/{tenant.Id}", new { tenant = Summary(tenant), jobId = job.Id });
         }
         catch (InvalidOperationException ex)
         {
