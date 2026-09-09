@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import {
-  Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title,
+  Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowUp } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowUp, IconTrash } from '@tabler/icons-react';
 import { api, type ImageTag, type Images, type Tenant } from './api';
 import { JobProgress, useJob, usePoll } from './shared';
 
@@ -13,6 +13,7 @@ export function ImagesPage() {
   const [loading, setLoading] = useState(true);
   const [upgrade, setUpgrade] = useState<{ tag: ImageTag; tenant: Tenant } | null>(null);
   const [pick, setPick] = useState<ImageTag | null>(null);
+  const [remove, setRemove] = useState<ImageTag | null>(null);
   const [confirm, setConfirm] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJob(jobId);
@@ -39,6 +40,11 @@ export function ImagesPage() {
         <Group gap={6}>
           <Code>{t.tag}</Code>
           {t.isDefault && <Badge size="xs" variant="light">default for new tenants</Badge>}
+          {/* Two names for one image is the normal case here, not an oddity, and
+              it is the whole reason the delete button needs care. */}
+          {t.alsoTagged.length > 0 && (
+            <Text size="xs" c="dimmed">= {t.alsoTagged.map((x) => <Code key={x} fz={11}>{x}</Code>)}</Text>
+          )}
         </Group>
       </Table.Td>
       <Table.Td>
@@ -47,9 +53,22 @@ export function ImagesPage() {
         )}
       </Table.Td>
       <Table.Td>
-        <Button size="xs" variant="light" leftSection={<IconArrowUp size={14} />} onClick={() => { setPick(t); setConfirm(''); }}>
-          Move a tenant here
-        </Button>
+        <Group gap={6} justify="flex-end" wrap="nowrap">
+          <Button size="xs" variant="light" leftSection={<IconArrowUp size={14} />} onClick={() => { setPick(t); setConfirm(''); }}>
+            Move a tenant here
+          </Button>
+          <Tooltip label={t.deleteBlockedBy ?? 'Remove this image from the registry'} multiline w={320} withArrow>
+            {/* A disabled button cannot fire hover, so the span carries it — and
+                the reason matters more than the button here. */}
+            <span>
+              <Button size="xs" variant="subtle" color="red" disabled={!t.canDelete}
+                leftSection={<IconTrash size={14} />}
+                onClick={() => { setRemove(t); setConfirm(''); }}>
+                Delete
+              </Button>
+            </span>
+          </Tooltip>
+        </Group>
       </Table.Td>
     </Table.Tr>
   ));
@@ -175,6 +194,45 @@ export function ImagesPage() {
               }}
             >
               Snapshot and upgrade
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal opened={Boolean(remove)} onClose={() => setRemove(null)} title="Delete from the registry">
+        <Stack gap="sm">
+          {/* The registry deletes MANIFESTS, not tags. Naming only the clicked tag
+              here would be a lie whenever the image has more than one name — which,
+              in this registry, is nearly always. */}
+          {remove && remove.alsoTagged.length > 0 ? (
+            <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+              <Code>{remove.tag}</Code> is not a name the registry can remove on its own — it removes the image, and
+              with it every name pointing at the same one. This deletes{' '}
+              <b>{[remove.tag, ...remove.alsoTagged].length} tags</b>:{' '}
+              {[remove.tag, ...remove.alsoTagged].map((x) => <Code key={x}>{x}</Code>).reduce((a, b) => <>{a}{', '}{b}</>)}
+            </Alert>
+          ) : (
+            <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+              Removes <Code>{remove?.tag}</Code> from the registry. Nothing runs it and no release shares it.
+            </Alert>
+          )}
+          <Text size="xs" c="dimmed">
+            Disk is not freed by this. The manifest goes immediately; the layers survive until{' '}
+            <Code>registry garbage-collect</Code> runs on the registry host, which the panel cannot reach.
+          </Text>
+          <TextInput
+            label={`Type "${remove?.tag}" to confirm`} value={confirm}
+            onChange={(e) => setConfirm(e.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setRemove(null)}>Cancel</Button>
+            <Button color="red" disabled={confirm !== remove?.tag}
+              onClick={async () => {
+                const r = remove!; setRemove(null);
+                try { await api.removeImage(r.tag); await refresh(); }
+                catch (e) { setError((e as Error).message); }
+              }}
+            >
+              Delete it
             </Button>
           </Group>
         </Stack>

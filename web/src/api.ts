@@ -153,6 +153,13 @@ export interface ImageTag {
   image: string;
   inUseBy: string[];
   isDefault: boolean;
+  /** Manifest digest; null when the registry would not say. */
+  digest?: string | null;
+  /** Other tags on the SAME manifest. Deleting this tag deletes them too. */
+  alsoTagged: string[];
+  canDelete: boolean;
+  /** Why not, when canDelete is false — shown on hover instead of a dead button. */
+  deleteBlockedBy?: string | null;
 }
 
 export interface Images {
@@ -349,6 +356,14 @@ export const api = {
 
   // ---------------------------------------------------------------- images ---
   images: () => request<Images>('/api/images'),
+
+  /**
+   * Removes the MANIFEST, so every tag on it goes. The API refuses when any of
+   * those names is in use, is a release, or is the fleet default.
+   */
+  removeImage: (tag: string) =>
+    request<{ success: boolean; digest: string; removed: string[]; note: string }>(
+      `/api/images/${encodeURIComponent(tag)}?confirmTag=${encodeURIComponent(tag)}`, { method: 'DELETE' }),
 
   /** Snapshots first — that snapshot is the only way back past a migration. */
   upgrade: (tenantId: string, imageTag: string) =>
