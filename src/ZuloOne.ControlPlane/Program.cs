@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
 using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -79,11 +80,15 @@ builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();
 
-// Provisioning takes minutes and must not depend on the caller staying connected.
-// Singleton queue, hosted worker, one scope per tenant — see ProvisioningQueue.cs.
-builder.Services.AddSingleton<ProvisioningQueue>();
-builder.Services.AddSingleton<IProvisioningQueue>(sp => sp.GetRequiredService<ProvisioningQueue>());
-builder.Services.AddHostedService<ProvisioningWorker>();
+// Everything that takes minutes goes through one durable queue: provisioning today,
+// plus snapshots, restores, upgrades, backups and switchovers. The jobs are ROWS,
+// so a restart neither loses queued work nor leaves a job claiming to run forever —
+// see Jobs/JobQueue.cs. Serial by design, which is also the mutual exclusion a
+// restore needs against a backup.
+builder.Services.AddSingleton<JobChannel>();
+builder.Services.AddScoped<IJobQueue, JobQueue>();
+builder.Services.AddScoped<IJobHandler, ProvisionJobHandler>();
+builder.Services.AddHostedService<JobWorker>();
 
 var app = builder.Build();
 

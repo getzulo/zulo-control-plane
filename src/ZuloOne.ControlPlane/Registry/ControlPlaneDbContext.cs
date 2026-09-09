@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Jobs;
 
 namespace ZuloOne.ControlPlane.Registry;
 
@@ -18,6 +19,9 @@ public class ControlPlaneDbContext : DbContext
 
     public DbSet<OperatorSession> OperatorSessions => Set<OperatorSession>();
 
+    /// <summary>Every long-running operation the panel has performed, and its outcome.</summary>
+    public DbSet<Job> Jobs => Set<Job>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -26,6 +30,20 @@ public class ControlPlaneDbContext : DbContext
         modelBuilder.Entity<Tenant>().HasIndex(t => t.Slug).IsUnique();
         modelBuilder.Entity<Tenant>().Property(t => t.Status).HasConversion<string>();
         modelBuilder.Entity<Tenant>().Property(t => t.Health).HasConversion<string>();
+
+        // Stored as text, like the tenant's enums: a job history is read by humans
+        // during an incident, and an integer there means consulting the source to
+        // find out what kind 3 was.
+        modelBuilder.Entity<Job>().Property(j => j.Kind).HasConversion<string>();
+        modelBuilder.Entity<Job>().Property(j => j.State).HasConversion<string>();
+        // The two queries that exist: the worker's sweep for unfinished work at
+        // start-up, and the panel listing a tenant's history newest-first.
+        modelBuilder.Entity<Job>().HasIndex(j => j.State);
+        modelBuilder.Entity<Job>().HasIndex(j => new { j.TenantId, j.CreatedAt });
+        // NOT a foreign key to Tenant. A Restore outlives the tenant it came from
+        // and a Delete outlives its subject entirely; a cascade would erase exactly
+        // the history someone is looking for, and a restrict would block the delete.
+        modelBuilder.Entity<Job>().Ignore(j => j.IsTerminal);
 
         modelBuilder.Entity<OperatorAccount>().HasIndex(a => a.Email).IsUnique();
 

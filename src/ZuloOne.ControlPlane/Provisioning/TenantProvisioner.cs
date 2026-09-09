@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Registry;
 
 namespace ZuloOne.ControlPlane.Provisioning;
@@ -96,25 +97,35 @@ public sealed class TenantProvisioner
     /// or a proxy's idle timeout cancelled provisioning halfway — see the catch
     /// block for what that left behind.
     /// </summary>
-    public async Task<Tenant> BuildAsync(Tenant tenant, CancellationToken ct = default)
+    /// <param name="job">
+    /// Where the steps are reported, so an operator watching a build that takes
+    /// minutes can see which of them it is on. Optional: the provisioner is still
+    /// callable without a job, and every call is null-guarded rather than requiring
+    /// a stub.
+    /// </param>
+    public async Task<Tenant> BuildAsync(Tenant tenant, JobContext? job = null, CancellationToken ct = default)
     {
         var slug = tenant.Slug;
         var adminEmail = tenant.AdminEmail ?? string.Empty;
 
         try
         {
+            if (job is not null) await job.StepAsync("Creating the database", 10, ct);
             var (database, role, password, connectionString) = await _databases.CreateAsync(slug, ct);
             tenant.DatabaseName = database;
             tenant.DatabaseRole = role;
             tenant.DatabasePassword = password;
             await SaveAsync(tenant, ct);
 
+            if (job is not null) await job.StepAsync("Starting the container", 25, ct);
             tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
             await SaveAsync(tenant, ct);
 
             // First boot runs migrations, schema sync and a metadata compile, so
             // readiness is minutes away, not seconds — seeding before it is ready
             // would just 404.
+            if (job is not null)
+                await job.StepAsync($"Waiting for first boot (up to {_fleet.ReadinessTimeoutSeconds}s)", 40, ct);
             var ready = await _health.WaitUntilReadyAsync(
                 _containers.HostFor(slug), TimeSpan.FromSeconds(_fleet.ReadinessTimeoutSeconds), ct);
             if (!ready)
@@ -122,6 +133,7 @@ public sealed class TenantProvisioner
 
             // POST /api/auth/setup is one-shot and anonymous: it only works while
             // the user table is empty, which is exactly now.
+            if (job is not null) await job.StepAsync("Seeding the administrator", 80, ct);
             var invitePassword = await _invites.SeedAdministratorAsync(_containers.HostFor(slug), adminEmail, ct);
             var invited = await _invites.SendInviteAsync(tenant, _containers.HostFor(slug), invitePassword, ct);
 
@@ -130,6 +142,12 @@ public sealed class TenantProvisioner
             // for no gain. If it did not, this row is the only thing standing
             // between the customer and a workspace nobody can sign in to.
             tenant.AdminPasswordOnce = invited ? null : invitePassword;
+            if (job is not null)
+            {
+                await job.LogAsync(invited
+                    ? $"Invitation sent to {adminEmail}."
+                    : "Mail is disabled or the send failed — the one-time password is held for a single read on the tenant's row.", ct);
+            }
 
             tenant.Status = TenantStatus.Active;
             tenant.Health = TenantHealth.Ok;
@@ -137,6 +155,7 @@ public sealed class TenantProvisioner
             tenant.LastError = null;
             await SaveAsync(tenant, ct);
 
+            if (job is not null) await job.StepAsync($"Active at {_containers.HostFor(slug)}", 100, ct);
             _logger.LogInformation("Tenant {Slug} is active at {Host}", slug, _containers.HostFor(slug));
             return tenant;
         }
@@ -158,6 +177,9 @@ public sealed class TenantProvisioner
             tenant.Status = TenantStatus.Failed;
             tenant.LastError = ex.Message;
             await SaveAsync(tenant, CancellationToken.None);
+
+            if (job is not null)
+                await job.StepAsync("Failed — rolling back", job.Job.Progress, CancellationToken.None);
 
             // Roll the half-built tenant back so a retry starts clean. The row is
             // KEPT (failed, with its error) — silently vanishing would hide the
