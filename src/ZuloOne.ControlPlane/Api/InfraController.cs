@@ -9,8 +9,22 @@ using ZuloOne.ControlPlane.Registry;
 
 namespace ZuloOne.ControlPlane.Api;
 
-/// <summary>What a database node publishes about itself every five minutes.</summary>
-public record NodeReportRequest(string Node, string Status, string? Report, DateTime? CheckedAt);
+/// <summary>
+/// What a database node publishes about itself every five minutes.
+/// </summary>
+/// <param name="CheckedAt">
+/// DateTimeOffset, NOT DateTime, and that is load-bearing. The node sends an ISO
+/// timestamp with an offset (<c>2026-09-09T03:08:56.420836+00:00</c>); binding it
+/// to DateTime yields Kind=Local, and Npgsql then refuses to write it:
+///
+///   Cannot write DateTime with Kind=Local to PostgreSQL type 'timestamp with
+///   time zone', only UTC is supported.
+///
+/// The endpoint returned 500 for every real report while a hand-made probe that
+/// happened to omit this field succeeded — so the failure looked like a transport
+/// problem rather than a binding one.
+/// </param>
+public record NodeReportRequest(string Node, string Status, string? Report, DateTimeOffset? CheckedAt);
 
 /// <summary>Which node should take the leader role.</summary>
 public record SwitchoverRequest(string Candidate, string ConfirmNode);
@@ -137,7 +151,9 @@ public class InfraController : ControllerBase
 
         row.Status = string.IsNullOrWhiteSpace(request.Status) ? "unknown" : request.Status.Trim();
         row.Report = request.Report;
-        row.CheckedAt = request.CheckedAt ?? DateTime.UtcNow;
+        // .UtcDateTime, so what reaches Npgsql always carries Kind=Utc regardless of
+        // the offset the node sent.
+        row.CheckedAt = request.CheckedAt?.UtcDateTime ?? DateTime.UtcNow;
         // The control plane's own clock, deliberately. Staleness measured against a
         // timestamp the reporter chose would let a node with a wrong clock — or a
         // stuck one — report itself perpetually fresh.

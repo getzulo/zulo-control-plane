@@ -229,6 +229,62 @@ jobs:
 
           echo "Version ${v} confirmed, fleet API is closed, schema is present."
 
+          # A ROUND TRIP through the node-report endpoint, using the timestamp shape
+          # a real node actually sends.
+          #
+          # This exists because that endpoint shipped returning 500 for every genuine
+          # report, while a hand-written probe succeeded. The probe omitted
+          # checkedAt; the nodes send "2026-09-09T03:08:56.420836+00:00", which bound
+          # to DateTime as Kind=Local — and Npgsql refuses to write anything but UTC
+          # to a timestamptz. Nothing above would have caught it: the container was
+          # healthy, the schema was present, and the fleet API was closed. Only a
+          # realistic payload finds it.
+          #
+          # This container has no Patroni__ReportToken, so 503 is the CORRECT answer
+          # (an unconfigured token must refuse, never accept anonymously). 500 is the
+          # failure being guarded against.
+          code=$(docker exec "$SMOKE_CP" curl -s -o /dev/null -w '%{http_code}' \
+            -X POST -H 'X-Node-Token: smoke-token' -H 'Content-Type: application/json' \
+            -d '{"node":"smoke-node","status":"healthy","report":"ci","checkedAt":"2026-09-09T03:08:56.420836+00:00"}' \
+            http://localhost:8080/api/infra/report)
+          if [ "$code" != "503" ]; then
+            echo "::error::Unconfigured node reporting answered ${code}, expected 503."
+            docker logs --tail 100 "$SMOKE_CP" || true
+            exit 1
+          fi
+
+          # Again WITH a token, so the WRITE path is exercised rather than being
+          # short-circuited by the 503 above — that write is where the bug was.
+          docker rm -f "$SMOKE_CP" >/dev/null
+          docker run -d --name "$SMOKE_CP" --network "$SMOKE_NET" \
+            -e "ConnectionStrings__ControlPlane=Host=${SMOKE_PG};Database=cp;Username=postgres;Password=smoke" \
+            -e "Patroni__ReportToken=smoke-token" \
+            "${REGISTRY}/${IMAGE}:${v}" >/dev/null
+          for i in $(seq 1 40); do
+            docker exec "$SMOKE_CP" curl -fsS http://localhost:8080/health >/dev/null 2>&1 && break
+            sleep 3
+          done
+          code=$(docker exec "$SMOKE_CP" curl -s -o /dev/null -w '%{http_code}' \
+            -X POST -H 'X-Node-Token: smoke-token' -H 'Content-Type: application/json' \
+            -d '{"node":"smoke-node","status":"healthy","report":"ci","checkedAt":"2026-09-09T03:08:56.420836+00:00"}' \
+            http://localhost:8080/api/infra/report)
+          if [ "$code" != "200" ]; then
+            echo "::error::A realistic node report answered ${code}, expected 200 — the report write path is broken."
+            docker logs --tail 100 "$SMOKE_CP" || true
+            exit 1
+          fi
+
+          # And a wrong token must still be refused now that one is configured.
+          code=$(docker exec "$SMOKE_CP" curl -s -o /dev/null -w '%{http_code}' \
+            -X POST -H 'X-Node-Token: wrong' -H 'Content-Type: application/json' \
+            -d '{"node":"smoke-node","status":"healthy"}' \
+            http://localhost:8080/api/infra/report)
+          if [ "$code" != "401" ]; then
+            echo "::error::A bad node token answered ${code}, expected 401 — anyone could forge a healthy report."
+            exit 1
+          fi
+          echo "Node reporting round-trips with a real timestamp, and rejects a bad token."
+
       - name: Assert the dashboard is in the image
         shell: bash
         run: |
