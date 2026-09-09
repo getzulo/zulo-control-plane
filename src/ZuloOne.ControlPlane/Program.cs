@@ -109,10 +109,11 @@ builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
 builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
 builder.Services.AddScoped<IJobHandler, UpgradeJobHandler>();
 builder.Services.AddScoped<IJobHandler, PruneJobHandler>();
+builder.Services.AddScoped<IJobHandler, RegistrySnapshotJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
-// Only ENQUEUES a prune. The sweep itself runs through the queue, so it inherits
-// the one-at-a-time execution that keeps a delete away from a dump being written
-// or a restore reading one.
+// Only ENQUEUES: a registry dump, then a prune. Both run through the queue, so
+// they inherit the one-at-a-time execution that keeps a delete away from a dump
+// being written or a restore reading one.
 builder.Services.AddHostedService<PruneScheduler>();
 
 // The image registry is plain HTTP on the LAN and answers instantly or not at all.

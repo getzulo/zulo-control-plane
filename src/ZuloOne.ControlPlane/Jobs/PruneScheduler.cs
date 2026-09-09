@@ -72,14 +72,20 @@ public sealed class PruneScheduler : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<ControlPlaneDbContext>();
 
         var pending = await db.Jobs.AnyAsync(
-            j => j.Kind == JobKind.Prune && (j.State == JobState.Queued || j.State == JobState.Running), ct);
+            j => (j.Kind == JobKind.Prune || j.Kind == JobKind.RegistrySnapshot)
+                 && (j.State == JobState.Queued || j.State == JobState.Running), ct);
         if (pending)
         {
-            _logger.LogInformation("A prune is already queued or running; not adding another.");
+            _logger.LogInformation("Maintenance is already queued or running; not adding another.");
             return;
         }
 
         var queue = scope.ServiceProvider.GetRequiredService<IJobQueue>();
+
+        // Snapshot BEFORE prune, and the queue is first-in-first-out, so the fresh
+        // registry dump exists before retention runs and gets counted by it. The
+        // other order would sweep against a list that was one short.
+        await queue.EnqueueAsync(JobKind.RegistrySnapshot, tenantId: null, tenantSlug: null, createdBy: "schedule", ct: ct);
         await queue.EnqueueAsync(JobKind.Prune, tenantId: null, tenantSlug: null, createdBy: "schedule", ct: ct);
     }
 }

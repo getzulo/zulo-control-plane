@@ -80,7 +80,9 @@ export type JobState = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelle
 export type JobKind =
   | 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
-  | 'Prune';
+  | 'Prune'
+  /** Dump of the panel's OWN database — the record of which container belongs to whom. */
+  | 'RegistrySnapshot';
 
 export interface Job {
   id: string;
@@ -189,7 +191,7 @@ export interface Snapshot {
   tenantSlug: string;
   databaseName: string;
   sizeBytes: number;
-  kind: 'Manual' | 'PreUpgrade' | 'PreSwap';
+  kind: 'Manual' | 'PreUpgrade' | 'PreSwap' | 'Registry';
   note?: string | null;
   imageTag?: string | null;
   createdAt: string;

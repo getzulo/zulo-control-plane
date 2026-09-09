@@ -43,6 +43,15 @@ public enum JobKind
     /// from the <c>pg_dump</c> writing a file or the <c>pg_restore</c> reading one.
     /// </remarks>
     Prune,
+
+    /// <summary>
+    /// Dump the panel's own database — the registry — as a restore point.
+    /// </summary>
+    /// <remarks>
+    /// Queued just before the prune on the same maintenance tick, so the fresh
+    /// dump exists before retention is applied and the sweep counts it.
+    /// </remarks>
+    RegistrySnapshot,
 }
 
 /// <summary>

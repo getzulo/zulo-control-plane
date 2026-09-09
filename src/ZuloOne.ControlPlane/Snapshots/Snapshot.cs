@@ -13,6 +13,23 @@ public enum SnapshotKind
 
     /// <summary>Taken from the live tenant just before a restored copy replaced it.</summary>
     PreSwap,
+
+    /// <summary>
+    /// The panel's OWN database — the registry — on the maintenance schedule.
+    /// </summary>
+    /// <remarks>
+    /// It is the only record of which container and which database belong to
+    /// whom. Losing it does not lose a tenant's data; it loses the ability to say
+    /// whose data it is. pgBackRest covers it as part of the cluster, but that
+    /// path recovers a whole machine — this one recovers the registry alone, in
+    /// minutes, without touching anything else.
+    ///
+    /// <para>
+    /// Swept on its own retention rather than the per-tenant rule: it belongs to
+    /// no tenant, and it is small enough that keeping weeks of it costs nothing.
+    /// </para>
+    /// </remarks>
+    Registry,
 }
 
 /// <summary>

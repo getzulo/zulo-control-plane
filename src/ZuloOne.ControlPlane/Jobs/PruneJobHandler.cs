@@ -46,8 +46,10 @@ public sealed class PruneJobHandler : IJobHandler
     {
         var keepPerTenant = _settings.Int("Snapshots:KeepPerTenant");
         var keepDays = _settings.Int("Snapshots:KeepDays");
+        var registryDays = _settings.Int("Snapshots:RegistryKeepDays");
         var graceHours = _settings.Int("Snapshots:OrphanGraceHours");
         var cutoff = DateTime.UtcNow.AddDays(-keepDays);
+        var registryCutoff = DateTime.UtcNow.AddDays(-registryDays);
 
         await context.StepAsync($"Keeping {keepPerTenant} per tenant and everything under {keepDays} days", 10, ct);
 
@@ -64,7 +66,8 @@ public sealed class PruneJobHandler : IJobHandler
         var doomed = new List<Snapshot>();
         var keptBecauseInUse = 0;
 
-        foreach (var group in all.Where(s => s.Kind != SnapshotKind.Manual).GroupBy(s => s.TenantSlug))
+        foreach (var group in all.Where(s => s.Kind != SnapshotKind.Manual && s.Kind != SnapshotKind.Registry)
+                                 .GroupBy(s => s.TenantSlug))
         {
             // Newest first, so Skip() keeps the newest N.
             var ordered = group.OrderByDescending(s => s.CreatedAt).ToList();
@@ -80,8 +83,19 @@ public sealed class PruneJobHandler : IJobHandler
         }
 
         var manual = all.Count(s => s.Kind == SnapshotKind.Manual);
+
+        // The registry has its own rule: it belongs to no tenant, so the
+        // per-tenant count is meaningless for it, and it is small enough that
+        // depth is cheap. Age alone, and always keep the newest — a fleet with no
+        // recorded registry at all is the state this exists to prevent.
+        var registry = all.Where(s => s.Kind == SnapshotKind.Registry)
+            .OrderByDescending(s => s.CreatedAt).ToList();
+        var expiredRegistry = registry.Skip(1).Where(s => s.CreatedAt < registryCutoff).ToList();
+        doomed.AddRange(expiredRegistry);
+
         await context.LogAsync(
-            $"{all.Count} snapshot(s): {manual} manual (never swept), {doomed.Count} past the policy, "
+            $"{all.Count} snapshot(s): {manual} manual (never swept), {registry.Count} registry "
+            + $"({expiredRegistry.Count} past {registryDays} days), {doomed.Count} to remove, "
             + $"{keptBecauseInUse} held by a restored copy.", ct);
 
         await context.StepAsync($"Removing {doomed.Count} snapshot(s)", 40, ct);

@@ -7,7 +7,11 @@ import { IconAlertTriangle, IconArrowBackUp, IconEraser, IconRestore, IconTrash 
 import { api, type Cluster, type SettingGroup, type Snapshot, type SnapshotList, type Tenant } from './api';
 import { JobProgress, fmt, fmtBytes, useJob, usePoll } from './shared';
 
-const KIND_COLOR: Record<string, string> = { Manual: 'blue', PreUpgrade: 'orange', PreSwap: 'grape' };
+const KIND_COLOR: Record<string, string> = {
+  Manual: 'blue', PreUpgrade: 'orange', PreSwap: 'grape',
+  // Not a tenant's dump: the fleet registry itself, on its own retention.
+  Registry: 'teal',
+};
 
 export function SnapshotsPage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
