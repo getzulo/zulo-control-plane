@@ -8,6 +8,7 @@ using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
+using ZuloOne.ControlPlane.Snapshots;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -95,7 +96,16 @@ builder.Services.AddScoped<TenantProvisioner>();
 builder.Services.AddSingleton<JobChannel>();
 builder.Services.AddScoped<IJobQueue, JobQueue>();
 builder.Services.AddScoped<IJobHandler, ProvisionJobHandler>();
+builder.Services.AddScoped<IJobHandler, SnapshotJobHandler>();
+builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
+builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
+
+// pg_dump / pg_restore, run as child processes. A logical dump needs no shell on a
+// database node: the panel already routes to Postgres and reads every tenant it
+// manages.
+builder.Services.Configure<SnapshotSettings>(builder.Configuration.GetSection("Snapshots"));
+builder.Services.AddScoped<PgTools>();
 
 var app = builder.Build();
 

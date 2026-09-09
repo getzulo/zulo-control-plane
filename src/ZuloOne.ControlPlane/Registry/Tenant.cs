@@ -103,6 +103,35 @@ public class Tenant
 
     public TenantHealth Health { get; set; } = TenantHealth.Unknown;
 
+    /// <summary>
+    /// Set on a throwaway copy produced by a restore: which tenant it came from,
+    /// which snapshot, and when.
+    ///
+    /// A restored copy is a tenant in every mechanical sense — its own database,
+    /// role, container and hostname — and without this it would be indistinguishable
+    /// from a real customer in the fleet list. It also decides what the panel offers
+    /// for the row: a copy can be swapped in or discarded, a customer cannot.
+    /// </summary>
+    [MaxLength(63)]
+    public string? RestoredFromSlug { get; set; }
+
+    public Guid? RestoredFromSnapshotId { get; set; }
+
+    public DateTime? RestoredAt { get; set; }
+
+    /// <summary>
+    /// The database this tenant used BEFORE a swap, kept under a timestamped name.
+    ///
+    /// This is the undo, and it is why a swap is not a leap of faith: renaming the
+    /// old database aside costs nothing and takes no time, where dumping it at that
+    /// moment would cost both. It is discarded by an explicit action — until then it
+    /// occupies disk, which is the trade being made deliberately.
+    /// </summary>
+    [MaxLength(63)]
+    public string? PreviousDatabaseName { get; set; }
+
+    public DateTime? PreviousDatabaseAt { get; set; }
+
     public DateTime? LastHealthAt { get; set; }
 
     /// <summary>Why provisioning or a lifecycle action failed; null when fine.</summary>

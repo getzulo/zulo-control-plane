@@ -12,6 +12,12 @@ public enum JobKind
     /// <summary>Rebuild a tenant's data alongside the live one, into a NEW tenant.</summary>
     Restore,
 
+    /// <summary>
+    /// Put a verified restored database under the live tenant, keeping the tenant's
+    /// identity and renaming the displaced database aside as the undo.
+    /// </summary>
+    Swap,
+
     /// <summary>Move a tenant to another image tag, snapshot first.</summary>
     Upgrade,
 

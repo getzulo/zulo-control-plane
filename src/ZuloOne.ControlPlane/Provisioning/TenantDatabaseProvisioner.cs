@@ -151,6 +151,89 @@ public sealed class TenantDatabaseProvisioner
         }
     }
 
+    /// <summary>
+    /// Puts a restored database in place of a live one, keeping the live tenant's
+    /// identity — same name, same role, same password, so its container's connection
+    /// string does not change and its running configuration is untouched.
+    ///
+    /// <para>
+    /// The displaced database is RENAMED rather than dropped, and that rename is the
+    /// undo. It is instant and lossless, which a fresh dump at this moment would not
+    /// be; the operator discards it explicitly once satisfied.
+    /// </para>
+    ///
+    /// <para>
+    /// Callers MUST stop both containers first. Two things follow from
+    /// <c>ALTER DATABASE … RENAME</c>: it needs the database to have no sessions, and
+    /// it cannot run inside a transaction — so there is a brief window between the
+    /// two renames where the live name does not exist. If the second fails, the
+    /// recovery is one statement, and it is named in the exception rather than left
+    /// to be worked out.
+    /// </para>
+    /// </summary>
+    public async Task SwapAsync(
+        string liveDatabase, string liveRole, string scratchDatabase, string scratchRole,
+        string archiveDatabase, CancellationToken ct = default)
+    {
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+
+        // Both, and not only the live one: the scratch copy's own container was just
+        // stopped, and a lingering pooled session blocks its rename too.
+        foreach (var database in new[] { liveDatabase, scratchDatabase })
+        {
+            await ExecuteAsync(admin,
+                $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
+        }
+
+        await ExecuteAsync(admin, $"ALTER DATABASE \"{liveDatabase}\" RENAME TO \"{archiveDatabase}\"", ct);
+        try
+        {
+            await ExecuteAsync(admin, $"ALTER DATABASE \"{scratchDatabase}\" RENAME TO \"{liveDatabase}\"", ct);
+        }
+        catch (Exception ex)
+        {
+            // Put it back rather than leave the tenant with no database at all.
+            try
+            {
+                await ExecuteAsync(admin,
+                    $"ALTER DATABASE \"{archiveDatabase}\" RENAME TO \"{liveDatabase}\"", CancellationToken.None);
+                throw new InvalidOperationException(
+                    $"The swap failed and was undone — '{liveDatabase}' is back as it was. Cause: {ex.Message}", ex);
+            }
+            catch (Exception undo) when (undo is not InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    $"The swap failed AND could not be undone. '{liveDatabase}' currently does not exist; " +
+                    $"it is present as '{archiveDatabase}'. Recover with: " +
+                    $"ALTER DATABASE \"{archiveDatabase}\" RENAME TO \"{liveDatabase}\"; — original cause: {ex.Message}", ex);
+            }
+        }
+
+        // The database now carries the live name but is still owned by the scratch
+        // role, and every object inside it with it. Both must move, or the live
+        // tenant cannot alter its own tables and dropping the scratch role fails.
+        await ExecuteAsync(admin, $"ALTER DATABASE \"{liveDatabase}\" OWNER TO \"{liveRole}\"", ct);
+
+        await using var inTenant = new NpgsqlConnection(AdminConnectionString(liveDatabase));
+        await inTenant.OpenAsync(ct);
+        await ExecuteAsync(inTenant, $"REASSIGN OWNED BY \"{scratchRole}\" TO \"{liveRole}\"", ct);
+        // Whatever REASSIGN does not move is a privilege rather than an object;
+        // without dropping those the role cannot be removed afterwards.
+        await ExecuteAsync(inTenant, $"DROP OWNED BY \"{scratchRole}\"", ct);
+        await ExecuteAsync(inTenant, $"GRANT ALL ON SCHEMA public TO \"{liveRole}\"", ct);
+    }
+
+    /// <summary>Drops one database outright — the explicit discard of a kept copy.</summary>
+    public async Task DropDatabaseAsync(string database, CancellationToken ct = default)
+    {
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+        await ExecuteAsync(admin,
+            $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
+        await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS \"{database}\"", ct);
+    }
+
     public string TenantConnectionString(string database, string role, string password)
     {
         var host = string.IsNullOrWhiteSpace(_settings.TenantHost) ? _settings.Host : _settings.TenantHost;

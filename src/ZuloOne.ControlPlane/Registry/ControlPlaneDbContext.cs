@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Auth;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
+using ZuloOne.ControlPlane.Snapshots;
 
 namespace ZuloOne.ControlPlane.Registry;
 
@@ -26,6 +27,9 @@ public class ControlPlaneDbContext : DbContext
     /// <summary>Each database node's last self-check, keyed by hostname.</summary>
     public DbSet<NodeHealth> NodeHealth => Set<NodeHealth>();
 
+    /// <summary>Logical dumps held on the control plane's disk.</summary>
+    public DbSet<Snapshot> Snapshots => Set<Snapshot>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -48,6 +52,13 @@ public class ControlPlaneDbContext : DbContext
         // and a Delete outlives its subject entirely; a cascade would erase exactly
         // the history someone is looking for, and a restrict would block the delete.
         modelBuilder.Entity<Job>().Ignore(j => j.IsTerminal);
+
+        modelBuilder.Entity<Snapshot>().Property(s => s.Kind).HasConversion<string>();
+        // The list the panel shows: this tenant's snapshots, newest first.
+        modelBuilder.Entity<Snapshot>().HasIndex(s => new { s.TenantId, s.CreatedAt });
+        // No foreign key to Tenant, for the same reason as Jobs — a snapshot exists
+        // precisely so it can outlive trouble that befalls its tenant, including the
+        // tenant being deleted.
 
         modelBuilder.Entity<OperatorAccount>().HasIndex(a => a.Email).IsUnique();
 

@@ -62,6 +62,44 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libgssapi-krb5-2 curl \
     && rm -rf /var/lib/apt/lists/*
 
+# pg_dump / pg_restore, which are how a tenant is snapshotted and restored. The
+# panel already has a network route to Postgres and read rights on every tenant
+# database, so a logical dump needs nothing else — no shell on a database node, no
+# agent, no SSH key.
+#
+# Version 17 SPECIFICALLY, from PGDG rather than Ubuntu. Noble ships
+# postgresql-client-16, and pg_dump refuses outright to read a server newer than
+# itself:
+#
+#   pg_dump: error: server version: 17.x; pg_dump version: 16.x
+#   pg_dump: error: aborting because of server version mismatch
+#
+# So the distribution package would fail on every single tenant, at the moment
+# somebody needed a backup. Pin the major deliberately: it must be >= the server,
+# and a silent jump ahead of the cluster is worth noticing rather than absorbing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+https://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    # A glob that matched nothing is not an error to apt, and a missing pg_dump
+    # would only surface when a restore was already needed.
+    && pg_dump --version | grep -q ' 17\.' \
+    && pg_restore --version | grep -q ' 17\.'
+
+# Where snapshots land. A named volume is mounted here by the deployment so that
+# dumps outlive a container recreate — an upgrade's rollback is the snapshot taken
+# just before it, and losing it during the upgrade would be the worst possible
+# moment.
+RUN mkdir -p /var/zuloone/snapshots && chown $APP_UID:$APP_UID /var/zuloone/snapshots
+ENV Snapshots__Path=/var/zuloone/snapshots
+
 COPY --from=build /app/publish ./
 COPY --from=spa /spa/dist ./wwwroot
 
