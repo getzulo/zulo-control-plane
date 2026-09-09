@@ -30,6 +30,26 @@ public enum TenantHealth
 }
 
 /// <summary>
+/// Who created the tenant's database and container — which is the only honest
+/// basis for deciding whether the panel may destroy them.
+/// </summary>
+public enum TenantOrigin
+{
+    /// <summary>
+    /// The panel built it. Deleting undoes the panel's own work, so it is allowed
+    /// with the usual slug confirmation.
+    /// </summary>
+    Provisioned,
+
+    /// <summary>
+    /// The panel took over something that already existed. It never created the
+    /// data, so it must not be able to destroy it — <c>POST /release</c> drops the
+    /// registry row and leaves the tenant running.
+    /// </summary>
+    Adopted,
+}
+
+/// <summary>
 /// One customer instance: a container, its own database and a subdomain
 /// (docs/architecture/ControlPlane.Deployment.md §2). This row is what lets the
 /// fleet be rebuilt after a control-plane restart — it is the only place that
@@ -133,6 +153,28 @@ public class Tenant
     public DateTime? PreviousDatabaseAt { get; set; }
 
     public DateTime? LastHealthAt { get; set; }
+
+    /// <summary>
+    /// Where the database and container came from: did the panel create them, or
+    /// did it take over ones that already existed?
+    /// </summary>
+    /// <remarks>
+    /// This is what decides whether the panel may destroy them, and status cannot
+    /// answer it. Delete used to refuse on
+    /// <c>Status == Provisioning &amp;&amp; RestoredFromSlug is null &amp;&amp; DatabasePassword is null</c>,
+    /// which holds only if adoption fails on its FIRST step. Fail later — on the
+    /// container recreate, or waiting for health — and the row carries a password
+    /// with status Failed, so none of the three conditions hold and Delete would
+    /// happily drop a database the panel never created.
+    ///
+    /// <para>
+    /// An operator looking at a failed adoption reasonably reads the delete button
+    /// as "clear this bad registry entry". For an adopted tenant it must never
+    /// mean "and take the customer's data with it" — that is what
+    /// <c>POST /release</c> is for.
+    /// </para>
+    /// </remarks>
+    public TenantOrigin Origin { get; set; } = TenantOrigin.Provisioned;
 
     /// <summary>Why provisioning or a lifecycle action failed; null when fine.</summary>
     public string? LastError { get; set; }

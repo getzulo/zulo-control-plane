@@ -12,6 +12,8 @@ export interface Tenant {
   displayName?: string | null;
   status: TenantStatus;
   health: TenantHealth;
+  /** Who created the database and container — decides whether they may be destroyed. */
+  origin: 'Provisioned' | 'Adopted';
   imageTag: string;
   adminEmail?: string | null;
   plan?: string | null;

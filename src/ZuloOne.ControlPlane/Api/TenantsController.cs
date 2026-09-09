@@ -162,6 +162,10 @@ public class TenantsController : ControllerBase
             ImageTag = string.IsNullOrWhiteSpace(request.ImageTag) ? container.Image : request.ImageTag!,
             ContainerId = container.Id,
             Status = TenantStatus.Provisioning,
+            // Recorded BEFORE the job runs, so it is already true if adoption fails
+            // at any step. This is what stops Delete from destroying a database the
+            // panel never created — see TenantOrigin.
+            Origin = TenantOrigin.Adopted,
             JwtSigningKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48)),
         };
         _db.Tenants.Add(tenant);
@@ -392,15 +396,22 @@ public class TenantsController : ControllerBase
         if (!string.Equals(confirmSlug, tenant.Slug, StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Pass confirmSlug={tenant.Slug} to confirm this deletes the tenant and its data." });
 
-        // A row whose adoption never completed describes a tenant the panel does not
-        // own — its database and container predate the registry entirely. Deleting
-        // through this path would destroy someone else's data to clean up our own
-        // failed bookkeeping, so it is refused and pointed at /release.
-        if (tenant.Status == TenantStatus.Provisioning && tenant.RestoredFromSlug is null && tenant.DatabasePassword is null)
+        // The panel may only destroy what the panel built. An adopted tenant's
+        // database and container predate the registry row entirely, so deleting
+        // through this path would take a customer's data to clean up our own
+        // bookkeeping.
+        //
+        // This used to test `Status == Provisioning && RestoredFromSlug is null &&
+        // DatabasePassword is null`, which only holds when adoption fails on its
+        // FIRST step. Fail on the container recreate or the health wait instead and
+        // the row has a password with status Failed — none of the three conditions
+        // hold, and the delete went through. Provenance is the fact that actually
+        // answers the question; status never could.
+        if (tenant.Origin == TenantOrigin.Adopted)
             return Conflict(new
             {
-                error = $"'{tenant.Slug}' has a registry row but no credentials of ours — its adoption did not complete, " +
-                        $"so its database and container are not this panel's to destroy. Use POST /api/tenants/{id}/release to drop the row and leave it running.",
+                error = $"'{tenant.Slug}' was adopted, not provisioned here — its database and container are not this panel's to destroy. " +
+                        $"Use POST /api/tenants/{id}/release to drop the registry row and leave the tenant running.",
             });
 
         await _provisioner.DeleteAsync(tenant, ct);
@@ -465,6 +476,9 @@ public class TenantsController : ControllerBase
         t.DisplayName,
         status = t.Status.ToString(),
         health = t.Health.ToString(),
+        // Surfaced so the UI can offer "release" instead of "delete" for a tenant
+        // the panel did not build, rather than offering an action the API refuses.
+        origin = t.Origin.ToString(),
         t.ImageTag,
         t.AdminEmail,
         t.Plan,

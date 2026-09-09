@@ -4,7 +4,7 @@ import {
   Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Table, Tabs, Text, TextInput, Title,
 } from '@mantine/core';
 import {
-  IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash,
+  IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
 import { api, type ImageTag, type Job, type Snapshot, type Tenant, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
@@ -103,6 +103,9 @@ export function TenantPage() {
   if (!tenant) return <Alert color="red">{error ?? 'Tenant not found'}</Alert>;
 
   const isCopy = Boolean(tenant.restoredFromSlug);
+  // The panel did not create this one's database, so it must not offer to
+  // destroy it — the API refuses either way.
+  const adopted = tenant.origin === 'Adopted';
 
   return (
     <Stack gap="md">
@@ -150,9 +153,10 @@ export function TenantPage() {
           >
             Reset password
           </Button>
-          <Button size="xs" color="red" variant="light" leftSection={<IconTrash size={14} />}
-            onClick={() => { setDestroy('delete'); setConfirm(''); }}>
-            Delete
+          <Button size="xs" color={adopted ? 'blue' : 'red'} variant="light"
+            leftSection={adopted ? <IconUnlink size={14} /> : <IconTrash size={14} />}
+            onClick={() => { setDestroy(adopted ? 'release' : 'delete'); setConfirm(''); }}>
+            {adopted ? 'Stop managing' : 'Delete'}
           </Button>
         </Group>
       </Group>
@@ -353,10 +357,20 @@ export function TenantPage() {
             </Alert>
           )}
           {/* Both are offered here, because the difference only matters at this
-              moment and getting it wrong destroys data. */}
-          <Button variant="subtle" size="xs" onClick={() => setDestroy(destroy === 'delete' ? 'release' : 'delete')}>
-            {destroy === 'delete' ? 'I only want to stop managing it →' : '← I really want to destroy it'}
-          </Button>
+              moment and getting it wrong destroys data. An adopted tenant gets no
+              such choice: the panel did not create its database and the API
+              refuses to delete it, so offering the button would only produce a
+              409 after the operator had typed the slug. */}
+          {adopted ? (
+            <Alert color="gray" variant="light">
+              <b>{tenant.slug}</b> was adopted, not created here. Its database and container existed before the panel
+              did, so destroying them is not this panel's to offer.
+            </Alert>
+          ) : (
+            <Button variant="subtle" size="xs" onClick={() => setDestroy(destroy === 'delete' ? 'release' : 'delete')}>
+              {destroy === 'delete' ? 'I only want to stop managing it →' : '← I really want to destroy it'}
+            </Button>
+          )}
           <TextInput label={`Type "${tenant.slug}" to confirm`} value={confirm} onChange={(e) => setConfirm(e.currentTarget.value)} />
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setDestroy(null)}>Cancel</Button>

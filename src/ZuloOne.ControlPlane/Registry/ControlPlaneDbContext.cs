@@ -38,6 +38,7 @@ public class ControlPlaneDbContext : DbContext
         modelBuilder.Entity<Tenant>().HasIndex(t => t.Slug).IsUnique();
         modelBuilder.Entity<Tenant>().Property(t => t.Status).HasConversion<string>();
         modelBuilder.Entity<Tenant>().Property(t => t.Health).HasConversion<string>();
+        modelBuilder.Entity<Tenant>().Property(t => t.Origin).HasConversion<string>();
 
         // Stored as text, like the tenant's enums: a job history is read by humans
         // during an incident, and an integer there means consulting the source to

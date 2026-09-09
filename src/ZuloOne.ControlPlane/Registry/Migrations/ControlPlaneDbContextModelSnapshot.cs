@@ -241,6 +241,10 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                     b.Property<DateTime?>("LastHealthAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("Plan")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
