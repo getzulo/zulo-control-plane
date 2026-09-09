@@ -32,7 +32,7 @@ export function OverviewPage() {
     if (f.status === 'fulfilled') setFleet(f.value); else setError(f.reason?.message ?? 'Could not read the fleet');
     if (c.status === 'fulfilled') setCluster(c.value);
     if (j.status === 'fulfilled') setJobs(j.value);
-    if (s.status === 'fulfilled') setSnapshots(s.value);
+    if (s.status === 'fulfilled') setSnapshots(s.value.snapshots);
     setLoading(false);
   }, []);
 

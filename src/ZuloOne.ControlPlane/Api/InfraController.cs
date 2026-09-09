@@ -24,7 +24,9 @@ namespace ZuloOne.ControlPlane.Api;
 /// happened to omit this field succeeded — so the failure looked like a transport
 /// problem rather than a binding one.
 /// </param>
-public record NodeReportRequest(string Node, string Status, string? Report, DateTimeOffset? CheckedAt);
+public record NodeReportRequest(
+    string Node, string Status, string? Report, DateTimeOffset? CheckedAt,
+    System.Text.Json.JsonElement? Backups);
 
 /// <summary>Which node should take the leader role.</summary>
 public record SwitchoverRequest(string Candidate, string ConfirmNode);
@@ -102,7 +104,71 @@ public class InfraController : ControllerBase
                 .Where(r => cluster is null || !cluster.Members.Any(m =>
                     string.Equals(m.Name, r.Node, StringComparison.OrdinalIgnoreCase)))
                 .Select(r => new { r.Node, r.Status, r.ReceivedAt, r.Report }),
+            // The CLUSTER's backups, as distinct from the panel's per-tenant dumps.
+            // These are what a lost machine is recovered from, and they were
+            // invisible here until the node started sending its inventory along.
+            backups = SummariseBackups(reports, stale, now),
         });
+    }
+
+    /// <summary>
+    /// Flattens pgBackRest's inventory into what an operator checks: how old the
+    /// newest backup is, and whether anything is wrong with the stanza.
+    /// </summary>
+    private static object? SummariseBackups(List<NodeHealth> reports, TimeSpan stale, DateTime now)
+    {
+        var holder = reports.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r.BackupsJson));
+        if (holder is null) return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(holder.BackupsJson!);
+            var stanza = doc.RootElement.EnumerateArray().FirstOrDefault();
+            if (stanza.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+
+            var entries = stanza.TryGetProperty("backup", out var b) && b.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? b.EnumerateArray().Select(x => new
+                {
+                    label = x.GetProperty("label").GetString(),
+                    type = x.GetProperty("type").GetString(),
+                    // Epoch seconds; the panel wants an instant.
+                    stopped = DateTimeOffset.FromUnixTimeSeconds(
+                        x.GetProperty("timestamp").GetProperty("stop").GetInt64()).UtcDateTime,
+                    // `repository.size` is absent on this pgBackRest version —
+                    // only delta and size-map exist — so read defensively rather
+                    // than assume a shape that varies across releases.
+                    sizeBytes = x.TryGetProperty("info", out var i) && i.TryGetProperty("size", out var sz)
+                        ? sz.GetInt64() : 0L,
+                }).OrderByDescending(x => x.stopped).ToList()
+                : [];
+
+            var newest = entries.FirstOrDefault();
+            return new
+            {
+                node = holder.Node,
+                stanza = stanza.TryGetProperty("name", out var n) ? n.GetString() : null,
+                status = stanza.TryGetProperty("status", out var st) && st.TryGetProperty("message", out var msg)
+                    ? msg.GetString() : null,
+                count = entries.Count,
+                newest = newest is null ? null : new
+                {
+                    newest.label, newest.type, newest.stopped, newest.sizeBytes,
+                    ageHours = Math.Round((now - newest.stopped).TotalHours, 1),
+                },
+                lastFull = entries.FirstOrDefault(e => e.type == "full")?.stopped,
+                backups = entries.Take(10),
+                // Read from the node's report, which is itself only as fresh as the
+                // last five-minute run — say so rather than imply this is live.
+                asOf = holder.ReceivedAt,
+                asOfStale = now - holder.ReceivedAt > stale,
+            };
+        }
+        catch
+        {
+            // A shape we cannot read is not a reason to fail the whole page; the
+            // node's text report is still shown beside it.
+            return null;
+        }
     }
 
     /// <summary>
@@ -151,6 +217,11 @@ public class InfraController : ControllerBase
 
         row.Status = string.IsNullOrWhiteSpace(request.Status) ? "unknown" : request.Status.Trim();
         row.Report = request.Report;
+        // Kept as the node sent it. Only nodes that actually hold the repository
+        // report backups, so an absent field leaves the previous answer alone
+        // rather than blanking it.
+        if (request.Backups is { } backups && backups.ValueKind != System.Text.Json.JsonValueKind.Null)
+            row.BackupsJson = backups.GetRawText();
         // .UtcDateTime, so what reaches Npgsql always carries Kind=Utc regardless of
         // the offset the node sent.
         row.CheckedAt = request.CheckedAt?.UtcDateTime ?? DateTime.UtcNow;

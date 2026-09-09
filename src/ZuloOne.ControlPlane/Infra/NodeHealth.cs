@@ -37,6 +37,20 @@ public class NodeHealth
     /// <summary>The full human-readable check output, shown verbatim in the panel.</summary>
     public string? Report { get; set; }
 
+    /// <summary>
+    /// <c>pgbackrest info --output=json</c> as the node last saw it.
+    ///
+    /// Carried on the health report rather than fetched, because only this machine
+    /// can answer — the repository is a directory on its disk — and it is already
+    /// talking every five minutes. Building a channel to run one command would have
+    /// been the larger change.
+    ///
+    /// Stored as raw JSON: pgBackRest's shape varies across versions (this one has
+    /// no <c>repository.size</c>, only <c>delta</c> and <c>size-map</c>), and a
+    /// typed model would break on an upgrade of a tool the panel only reads.
+    /// </summary>
+    public string? BackupsJson { get; set; }
+
     /// <summary>When the node ran the check, by the node's clock.</summary>
     public DateTime CheckedAt { get; set; }
 

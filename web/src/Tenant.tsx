@@ -1,13 +1,32 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title,
+  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, SimpleGrid, Stack, Table, Tabs, Text, TextInput, Title,
 } from '@mantine/core';
 import {
   IconAlertTriangle, IconArrowLeft, IconCamera, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash,
 } from '@tabler/icons-react';
-import { api, type Job, type Snapshot, type Tenant } from './api';
+import { api, type Job, type Snapshot, type Tenant, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
+
+/**
+ * One number with its context. A bar only when there is a ceiling to be a
+ * fraction OF — CPU and a memory limit have one, a database size does not, and a
+ * bar with an invented maximum is worse than no bar.
+ */
+function Meter({ label, value, bar, hint }: { label: string; value: string; bar?: number; hint?: string }) {
+  const pct = bar == null || !Number.isFinite(bar) ? null : Math.min(100, Math.max(0, bar));
+  return (
+    <Card withBorder padding="sm">
+      <Text size="xs" c="dimmed" tt="uppercase" fw={600}>{label}</Text>
+      <Text fz={22} fw={700} lh={1.2}>{value}</Text>
+      {pct != null && (
+        <Progress value={pct} size="xs" mt={4} color={pct > 90 ? 'red' : pct > 70 ? 'yellow' : 'blue'} />
+      )}
+      {hint && <Text size="xs" c="dimmed" mt={2} lineClamp={1}>{hint}</Text>}
+    </Card>
+  );
+}
 
 export function TenantPage() {
   const { id = '' } = useParams();
@@ -15,6 +34,7 @@ export function TenantPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [logs, setLogs] = useState('');
+  const [stats, setStats] = useState<TenantStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -26,12 +46,19 @@ export function TenantPage() {
   const refresh = useCallback(async () => {
     try {
       const [t, j, s] = await Promise.all([api.tenant(id), api.jobs({ tenantId: id, limit: 20 }), api.snapshots(id)]);
-      setTenant(t); setJobs(j); setSnapshots(s); setError(null);
+      setTenant(t); setJobs(j); setSnapshots(s.snapshots); setError(null);
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   }, [id]);
 
   usePoll(refresh, 10_000);
+
+  // Separate and slower. Reading stats costs about a second — a real CPU
+  // percentage needs two samples from the Docker stats stream — so it must not sit
+  // in the path that keeps the rest of the page current.
+  usePoll(useCallback(async () => {
+    try { setStats(await api.stats(id)); } catch { /* shown as unavailable below */ }
+  }, [id]), 20_000);
 
   const act = async (fn: () => Promise<unknown>) => {
     try { await fn(); void refresh(); } catch (e) { setError((e as Error).message); }
@@ -104,6 +131,51 @@ export function TenantPage() {
       )}
 
       {job && <Card withBorder padding="sm"><JobProgress job={job} /></Card>}
+
+      {/* What it is COSTING, right now, on both sides. The panel had plenty about
+          how a tenant was configured and nothing about what it was doing. */}
+      <SimpleGrid cols={{ base: 2, sm: 4 }}>
+        <Meter
+          label="CPU"
+          value={stats?.container ? `${stats.container.cpuPercent.toFixed(1)}%` : '—'}
+          bar={stats?.container?.cpuPercent}
+          hint={stats?.container ? `container ${stats.container.state}` : 'no container'}
+        />
+        <Meter
+          label="Memory"
+          value={stats?.container ? fmtBytes(stats.container.memoryBytes) : '—'}
+          bar={stats?.container?.memoryPercent}
+          // A limit of 0 means unlimited, which must not render as "0% of 0 B".
+          hint={stats?.container?.memoryLimitBytes
+            ? `of ${fmtBytes(stats.container.memoryLimitBytes)}`
+            : 'no limit set'}
+        />
+        <Meter
+          label="Database"
+          value={stats?.database ? fmtBytes(stats.database.sizeBytes) : '—'}
+          hint={stats?.database
+            ? `${stats.database.tableCount} tables · largest ${stats.database.largestTableName ?? '—'}`
+            : 'not readable'}
+        />
+        <Meter
+          label="Connections"
+          value={stats?.database ? String(stats.database.connections) : '—'}
+          bar={stats?.database ? (stats.database.connections * 100) / stats.database.maxConnections : undefined}
+          hint={stats?.database ? `of ${stats.database.maxConnections} cluster-wide` : ''}
+        />
+      </SimpleGrid>
+
+      {stats?.error && (
+        // Partial answers are useful: which HALF failed is the actionable part.
+        <Alert color="yellow" p="xs"><Text size="xs">Some statistics could not be read — {stats.error}</Text></Alert>
+      )}
+
+      {stats?.container && (
+        <Text size="xs" c="dimmed">
+          Up since {fmt(stats.container.startedAt)} · {stats.container.restartCount} restarts ·
+          {' '}net {fmtBytes(stats.container.networkRxBytes)} in / {fmtBytes(stats.container.networkTxBytes)} out
+        </Text>
+      )}
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 6 }}>

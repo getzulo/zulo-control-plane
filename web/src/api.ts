@@ -75,6 +75,61 @@ export interface Cluster {
   scope?: string | null;
   members: ClusterMember[];
   unmatchedReports: { node: string; status: string; receivedAt: string; report?: string | null }[];
+  /** The CLUSTER's pgBackRest inventory, as distinct from per-tenant dumps. */
+  backups?: ClusterBackups | null;
+}
+
+/**
+ * pgBackRest, reported by whichever node holds the repository. Only as fresh as
+ * that node's last five-minute run — `asOfStale` says when to stop believing it.
+ */
+export interface ClusterBackups {
+  node: string;
+  stanza?: string | null;
+  status?: string | null;
+  count: number;
+  newest?: { label: string; type: string; stopped: string; sizeBytes: number; ageHours: number } | null;
+  lastFull?: string | null;
+  backups: { label: string; type: string; stopped: string; sizeBytes: number }[];
+  asOf: string;
+  asOfStale: boolean;
+}
+
+/** What one tenant is using right now, container and database. */
+export interface TenantStats {
+  container?: {
+    cpuPercent: number;
+    memoryBytes: number;
+    memoryLimitBytes: number;
+    memoryPercent: number;
+    startedAt?: string | null;
+    restartCount: number;
+    state: string;
+    networkRxBytes: number;
+    networkTxBytes: number;
+  } | null;
+  database?: {
+    sizeBytes: number;
+    connections: number;
+    maxConnections: number;
+    tableCount: number;
+    largestTableBytes?: number | null;
+    largestTableName?: string | null;
+  } | null;
+  /** Set when one half could not be read; the other half is still returned. */
+  error?: string | null;
+}
+
+export interface SnapshotList {
+  snapshots: Snapshot[];
+  disk: {
+    freeBytes: number;
+    totalBytes: number;
+    usedBySnapshots: number;
+    minFreeBytes: number;
+    /** Below this the server refuses to start a snapshot at all. */
+    belowFloor: boolean;
+  };
 }
 
 export interface Snapshot {
@@ -209,6 +264,10 @@ export const api = {
   restart: (id: string) => request<Tenant>(`/api/tenants/${id}/restart`, { method: 'POST' }),
   logs: (id: string, lines = 200) => request<{ logs: string }>(`/api/tenants/${id}/logs?lines=${lines}`),
 
+  /** Container CPU/memory and database size/connections. Takes ~1s: a real CPU
+   *  percentage needs two samples from the Docker stats stream. */
+  stats: (id: string) => request<TenantStats>(`/api/tenants/${id}/stats`),
+
   /** Shown once, then gone. Only ever set when the invitation could not be sent. */
   adminPassword: (id: string) =>
     request<{ user: string; password: string; note: string }>(
@@ -244,7 +303,7 @@ export const api = {
 
   // ------------------------------------------------------------- snapshots ---
   snapshots: (tenantId?: string) =>
-    request<Snapshot[]>(`/api/snapshots${tenantId ? `?tenantId=${tenantId}` : ''}`),
+    request<SnapshotList>(`/api/snapshots${tenantId ? `?tenantId=${tenantId}` : ''}`),
 
   takeSnapshot: (tenantId: string, note?: string) =>
     request<{ jobId: string }>(`/api/tenants/${tenantId}/snapshot`, {

@@ -1,16 +1,18 @@
 import { useCallback, useState } from 'react';
 import {
-  ActionIcon, Alert, Anchor, Badge, Button, Card, Code, Group, Loader, Modal, Select,
+  ActionIcon, Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select,
   Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import { IconAlertTriangle, IconArrowBackUp, IconRestore, IconTrash } from '@tabler/icons-react';
-import { api, type Snapshot, type Tenant } from './api';
+import { api, type Cluster, type Snapshot, type SnapshotList, type Tenant } from './api';
 import { JobProgress, fmt, fmtBytes, useJob, usePoll } from './shared';
 
 const KIND_COLOR: Record<string, string> = { Manual: 'blue', PreUpgrade: 'orange', PreSwap: 'grape' };
 
 export function SnapshotsPage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [disk, setDisk] = useState<SnapshotList['disk'] | null>(null);
+  const [cluster, setCluster] = useState<Cluster | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,8 +26,8 @@ export function SnapshotsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, t] = await Promise.all([api.snapshots(), api.listTenants()]);
-      setSnapshots(s); setTenants(t); setError(null);
+      const [s, t, c] = await Promise.all([api.snapshots(), api.listTenants(), api.cluster()]);
+      setSnapshots(s.snapshots); setDisk(s.disk); setTenants(t); setCluster(c); setError(null);
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   }, []);
@@ -66,6 +68,104 @@ export function SnapshotsPage() {
       </Group>
 
       {error && <Alert color="red" icon={<IconAlertTriangle size={16} />} withCloseButton onClose={() => setError(null)}>{error}</Alert>}
+
+      {/* Two different things called "backups", kept visibly apart.
+          The cluster's pgBackRest repository is what a lost MACHINE is recovered
+          from; the dumps below restore ONE tenant. Neither substitutes for the
+          other, and showing only the dumps — which is what this screen used to do
+          — made the fleet look far better protected than it is. */}
+      <Grid>
+        <Grid.Col span={{ base: 12, md: 7 }}>
+          <Card withBorder padding="md" h="100%">
+            <Group justify="space-between" mb="xs">
+              <Text fw={600}>Cluster backups (pgBackRest)</Text>
+              {cluster?.backups && (
+                <Badge variant="light" color={cluster.backups.status === 'ok' ? 'green' : 'red'}>
+                  {cluster.backups.status ?? 'unknown'}
+                </Badge>
+              )}
+            </Group>
+            {!cluster?.backups ? (
+              <Text size="sm" c="dimmed">
+                No node has reported an inventory. Only the machine holding the repository can, and it sends it with
+                its five-minute health check.
+              </Text>
+            ) : (
+              <>
+                <Group gap="xl" mb="xs">
+                  <div>
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Newest</Text>
+                    <Text fz={20} fw={700} lh={1.2}
+                      c={(cluster.backups.newest?.ageHours ?? 999) > 30 ? 'red' : undefined}>
+                      {cluster.backups.newest ? `${cluster.backups.newest.ageHours} h ago` : 'none'}
+                    </Text>
+                    <Text size="xs" c="dimmed">{cluster.backups.newest?.type ?? ''}</Text>
+                  </div>
+                  <div>
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Last full</Text>
+                    <Text fz={20} fw={700} lh={1.2}>{cluster.backups.lastFull ? fmt(cluster.backups.lastFull) : '—'}</Text>
+                  </div>
+                  <div>
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Kept</Text>
+                    <Text fz={20} fw={700} lh={1.2}>{cluster.backups.count}</Text>
+                  </div>
+                </Group>
+                {/* This number is only as fresh as the node's last run — say so
+                    rather than let it read as live. */}
+                <Text size="xs" c={cluster.backups.asOfStale ? 'orange' : 'dimmed'}>
+                  from {cluster.backups.node}, as of {fmt(cluster.backups.asOf)}
+                  {cluster.backups.asOfStale ? ' — that report is stale, so this may be out of date' : ''}
+                </Text>
+                <Table fz="xs" mt="xs" withRowBorders={false} verticalSpacing={2}>
+                  <Table.Tbody>
+                    {cluster.backups.backups.slice(0, 5).map((b) => (
+                      <Table.Tr key={b.label}>
+                        <Table.Td><Code style={{ fontSize: 10 }}>{b.label}</Code></Table.Td>
+                        <Table.Td><Badge size="xs" variant="light">{b.type}</Badge></Table.Td>
+                        <Table.Td>{fmt(b.stopped)}</Table.Td>
+                        <Table.Td ta="right">{fmtBytes(b.sizeBytes)}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </>
+            )}
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col span={{ base: 12, md: 5 }}>
+          <Card withBorder padding="md" h="100%">
+            <Text fw={600} mb="xs">Snapshot disk</Text>
+            {!disk || disk.totalBytes === 0 ? (
+              <Text size="sm" c="dimmed">Not readable.</Text>
+            ) : (
+              <>
+                <Text fz={20} fw={700} lh={1.2} c={disk.belowFloor ? 'red' : undefined}>
+                  {fmtBytes(disk.freeBytes)} free
+                </Text>
+                <Progress
+                  mt={6} size="sm"
+                  value={100 - (disk.freeBytes * 100) / disk.totalBytes}
+                  color={disk.belowFloor ? 'red' : 'blue'}
+                />
+                <Text size="xs" c="dimmed" mt={4}>
+                  {fmtBytes(disk.usedBySnapshots)} in snapshots · {fmtBytes(disk.totalBytes)} total
+                </Text>
+                {disk.belowFloor && (
+                  // Stated BEFORE somebody tries. The server refuses below the
+                  // floor rather than filling the disk it runs on, and finding
+                  // that out from a failed job is the worse way to learn it.
+                  <Alert color="red" mt="xs" p="xs">
+                    <Text size="xs">
+                      Below the {fmtBytes(disk.minFreeBytes)} floor — new snapshots will be refused until space is freed.
+                    </Text>
+                  </Alert>
+                )}
+              </>
+            )}
+          </Card>
+        </Grid.Col>
+      </Grid>
 
       {job && (
         <Card withBorder padding="sm">

@@ -167,6 +167,23 @@ public class TenantsController : ControllerBase
         return Accepted($"/api/tenants/{tenant.Id}", new { tenant = Summary(tenant), jobId = job.Id });
     }
 
+    /// <summary>
+    /// What this tenant is using right now — container and database.
+    ///
+    /// Read on demand rather than scraped. A fleet this size does not need a
+    /// time-series database to answer "what is it doing", and asking directly
+    /// cannot drift from reality the way a collector can. It costs about a second,
+    /// because a real CPU percentage needs two samples from the Docker stats
+    /// stream — a one-shot read reports a meaningless number.
+    /// </summary>
+    [HttpGet("{id:guid}/stats")]
+    public async Task<IActionResult> Stats(Guid id, [FromServices] TenantStatsService stats, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        return Ok(await stats.ReadAsync(tenant, ct));
+    }
+
     [HttpPost("{id:guid}/stop")]    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>
     {
         await _containers.StopAsync(tenant.ContainerId!, ct);

@@ -47,7 +47,7 @@ public class SnapshotsController : ControllerBase
 
     private string? Operator => User.Identity?.Name ?? User.FindFirst("email")?.Value;
 
-    /// <summary>Every snapshot, or one tenant's, newest first.</summary>
+    /// <summary>Every snapshot, or one tenant's, newest first — plus the disk they live on.</summary>
     [HttpGet("snapshots")]
     public async Task<IActionResult> List([FromQuery] Guid? tenantId, CancellationToken ct)
     {
@@ -55,7 +55,21 @@ public class SnapshotsController : ControllerBase
         if (tenantId is not null) query = query.Where(s => s.TenantId == tenantId);
 
         var snapshots = await query.OrderByDescending(s => s.CreatedAt).Take(200).ToListAsync(ct);
-        return Ok(snapshots.Select(s => new
+
+        // Headroom, reported ALONGSIDE the list rather than discovered when a
+        // snapshot refuses to start. The floor is enforced server-side; showing the
+        // number is what lets someone clear space before they need it.
+        long free = 0, total = 0;
+        try
+        {
+            Directory.CreateDirectory(_settings.Path);
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_settings.Path))!);
+            free = drive.AvailableFreeSpace;
+            total = drive.TotalSize;
+        }
+        catch { /* a path we cannot stat is not a reason to hide the snapshots */ }
+
+        var rows = snapshots.Select(s => new
         {
             s.Id,
             s.TenantId,
@@ -69,7 +83,22 @@ public class SnapshotsController : ControllerBase
             // Whether the file is still where the row says it is. A row without its
             // dump is worse than no row: it reads as a restore point that is not one.
             onDisk = System.IO.File.Exists(Path.Combine(_settings.Path, s.FileName)),
-        }));
+        }).ToList();
+
+        return Ok(new
+        {
+            snapshots = rows,
+            disk = new
+            {
+                freeBytes = free,
+                totalBytes = total,
+                usedBySnapshots = rows.Where(r => r.onDisk).Sum(r => r.SizeBytes),
+                minFreeBytes = _settings.MinFreeBytes,
+                // Below this the server refuses to start a snapshot at all, rather
+                // than filling the disk the control plane itself runs on.
+                belowFloor = free > 0 && free < _settings.MinFreeBytes,
+            },
+        });
     }
 
     /// <summary>Takes a dump of this tenant now. Returns the job that is doing it.</summary>
