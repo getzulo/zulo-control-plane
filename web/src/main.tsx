@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import { Center, Loader, MantineProvider, Stack, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
 import App from './App.tsx';
@@ -16,7 +17,16 @@ function Root() {
     return <Center h="100vh"><Loader /></Center>;
   }
 
-  if (ctx.authenticated) return <App />;
+  if (ctx.authenticated) {
+    // The router lives INSIDE the authenticated branch. A signed-out visitor has
+    // exactly one destination, and wrapping the login screen in routing would only
+    // create URLs that look navigable and are not.
+    return (
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    );
+  }
 
   if (ctx.localLoginAvailable) return <Login enrolled={ctx.enrolled} />;
 

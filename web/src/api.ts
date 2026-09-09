@@ -22,8 +22,89 @@ export interface Tenant {
   lastError?: string | null;
   /** True when a one-time administrator password is waiting to be read. */
   hasUnreadAdminPassword?: boolean;
+  /** Set on a throwaway copy produced by a restore — never on a real tenant. */
+  restoredFromSlug?: string | null;
+  restoredAt?: string | null;
+  /** The database set aside by a swap; the only way back to the data from before it. */
+  previousDatabaseName?: string | null;
+  previousDatabaseAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type JobState = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
+export type JobKind = 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover';
+
+export interface Job {
+  id: string;
+  kind: JobKind;
+  state: JobState;
+  tenantId?: string | null;
+  tenantSlug?: string | null;
+  step?: string | null;
+  progress: number;
+  error?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  /** Only on the single-job endpoint — the list omits it deliberately. */
+  log?: string | null;
+}
+
+export interface ClusterMember {
+  name: string;
+  role: string;
+  state: string;
+  host?: string | null;
+  port: number;
+  timeline?: number | null;
+  lag?: number | null;
+  lsn?: string | null;
+  /** The node's own five-minute check: healthy | degraded | broken | stale | never. */
+  selfCheck: string;
+  selfCheckAt?: string | null;
+  selfCheckAgeSeconds?: number | null;
+  selfCheckReport?: string | null;
+}
+
+export interface Cluster {
+  configured: boolean;
+  /** False when no node answered — distinct from an empty member list. */
+  reachable: boolean;
+  scope?: string | null;
+  members: ClusterMember[];
+  unmatchedReports: { node: string; status: string; receivedAt: string; report?: string | null }[];
+}
+
+export interface Snapshot {
+  id: string;
+  tenantId?: string | null;
+  tenantSlug: string;
+  databaseName: string;
+  sizeBytes: number;
+  kind: 'Manual' | 'PreUpgrade' | 'PreSwap';
+  note?: string | null;
+  imageTag?: string | null;
+  createdAt: string;
+  /** Whether the dump file is still where the row says it is. */
+  onDisk: boolean;
+}
+
+export interface ImageTag {
+  tag: string;
+  image: string;
+  inUseBy: string[];
+  isDefault: boolean;
+}
+
+export interface Images {
+  registry?: string | null;
+  repository?: string;
+  defaultImage?: string;
+  releases: ImageTag[];
+  builds: ImageTag[];
+  error?: string;
 }
 
 export interface FleetHealth {
@@ -113,9 +194,15 @@ export const api = {
   fleetHealth: () => request<FleetHealth>('/api/fleet/health'),
   listTenants: () => request<Tenant[]>('/api/tenants'),
 
-  /** Returns 202 immediately; watch the row's status for the rest. */
+  /** Returns 202 with the tenant AND the job building it. */
   createTenant: (body: { slug: string; displayName?: string; adminEmail: string; imageTag?: string; plan?: string }) =>
-    request<Tenant>('/api/tenants', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ tenant: Tenant; jobId: string }>('/api/tenants', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Brings a hand-deployed tenant under management. Its users are logged out. */
+  adoptTenant: (body: { slug: string; displayName?: string; adminEmail?: string; containerName?: string }) =>
+    request<{ tenant: Tenant; jobId: string }>('/api/tenants/adopt', { method: 'POST', body: JSON.stringify(body) }),
+
+  tenant: (id: string) => request<Tenant>(`/api/tenants/${id}`),
 
   stop: (id: string) => request<Tenant>(`/api/tenants/${id}/stop`, { method: 'POST' }),
   start: (id: string) => request<Tenant>(`/api/tenants/${id}/start`, { method: 'POST' }),
@@ -127,7 +214,66 @@ export const api = {
     request<{ user: string; password: string; note: string }>(
       `/api/tenants/${id}/admin-password`, { method: 'POST' }),
 
-  /** The slug must be repeated — this destroys the tenant's data and there is no backup yet. */
+  /** DESTROYS the tenant: container, database, role. The slug must be repeated. */
   remove: (id: string, confirmSlug: string) =>
     request<{ success: boolean }>(`/api/tenants/${id}?confirmSlug=${encodeURIComponent(confirmSlug)}`, { method: 'DELETE' }),
+
+  /** Stops MANAGING the tenant. The container keeps running and the data stays. */
+  release: (id: string, confirmSlug: string) =>
+    request<{ success: boolean; released: string; note: string }>(
+      `/api/tenants/${id}/release?confirmSlug=${encodeURIComponent(confirmSlug)}`, { method: 'POST' }),
+
+  // ------------------------------------------------------------------ jobs ---
+  jobs: (params?: { tenantId?: string; active?: boolean; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.tenantId) q.set('tenantId', params.tenantId);
+    if (params?.active) q.set('active', 'true');
+    if (params?.limit) q.set('limit', String(params.limit));
+    const s = q.toString();
+    return request<Job[]>(`/api/jobs${s ? `?${s}` : ''}`);
+  },
+  job: (id: string) => request<Job>(`/api/jobs/${id}`),
+
+  // ---------------------------------------------------------- infrastructure ---
+  cluster: () => request<Cluster>('/api/infra/cluster'),
+
+  /** Drops every open connection to the current leader. The node name is retyped. */
+  switchover: (candidate: string, confirmNode: string) =>
+    request<{ success: boolean; from: string; to: string; detail: string }>(
+      '/api/infra/switchover', { method: 'POST', body: JSON.stringify({ candidate, confirmNode }) }),
+
+  // ------------------------------------------------------------- snapshots ---
+  snapshots: (tenantId?: string) =>
+    request<Snapshot[]>(`/api/snapshots${tenantId ? `?tenantId=${tenantId}` : ''}`),
+
+  takeSnapshot: (tenantId: string, note?: string) =>
+    request<{ jobId: string }>(`/api/tenants/${tenantId}/snapshot`, {
+      method: 'POST', body: JSON.stringify({ note: note ?? null }),
+    }),
+
+  /** Builds a THROWAWAY tenant from the dump. Nothing live is touched. */
+  restoreSnapshot: (snapshotId: string) =>
+    request<{ jobId: string }>(`/api/snapshots/${snapshotId}/restore`, { method: 'POST' }),
+
+  deleteSnapshot: (id: string) => request<{ success: boolean }>(`/api/snapshots/${id}`, { method: 'DELETE' }),
+
+  /** Puts a verified copy's database under the live tenant. */
+  swap: (liveTenantId: string, scratchTenantId: string, confirmSlug: string) =>
+    request<{ jobId: string }>(`/api/tenants/${liveTenantId}/swap`, {
+      method: 'POST', body: JSON.stringify({ scratchTenantId, confirmSlug }),
+    }),
+
+  /** Drops the database a swap set aside — the last way back. */
+  discardPrevious: (tenantId: string, confirmSlug: string) =>
+    request<{ success: boolean; dropped: string }>(
+      `/api/tenants/${tenantId}/previous-database?confirmSlug=${encodeURIComponent(confirmSlug)}`, { method: 'DELETE' }),
+
+  // ---------------------------------------------------------------- images ---
+  images: () => request<Images>('/api/images'),
+
+  /** Snapshots first — that snapshot is the only way back past a migration. */
+  upgrade: (tenantId: string, imageTag: string) =>
+    request<{ jobId: string }>(`/api/tenants/${tenantId}/upgrade`, {
+      method: 'POST', body: JSON.stringify({ imageTag }),
+    }),
 };
