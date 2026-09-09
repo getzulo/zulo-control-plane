@@ -58,6 +58,14 @@ public class SnapshotsController : ControllerBase
 
         var snapshots = await query.OrderByDescending(s => s.CreatedAt).Take(200).ToListAsync(ct);
 
+        // Summed in the DATABASE over every row, not over the 200 returned above.
+        // The roll-up used to be computed from that truncated list, so the figure
+        // an operator reads before deciding whether to prune would understate the
+        // moment the fleet passed 200 snapshots — precisely when it starts to
+        // matter. The count is returned too, so a truncated list says so.
+        var totalCount = await query.CountAsync(ct);
+        var totalBytes = await query.SumAsync(s => (long?)s.SizeBytes, ct) ?? 0;
+
         // Headroom, reported ALONGSIDE the list rather than discovered when a
         // snapshot refuses to start. The floor is enforced server-side; showing the
         // number is what lets someone clear space before they need it.
@@ -90,17 +98,42 @@ public class SnapshotsController : ControllerBase
         return Ok(new
         {
             snapshots = rows,
+            // Says so when the list is only part of the picture, rather than
+            // letting the screen imply these are all of them.
+            totalCount,
+            truncated = totalCount > rows.Count,
             disk = new
             {
                 freeBytes = free,
                 totalBytes = total,
-                usedBySnapshots = rows.Where(r => r.onDisk).Sum(r => r.SizeBytes),
+                usedBySnapshots = totalBytes,
                 minFreeBytes = _settings.MinFreeBytes,
                 // Below this the server refuses to start a snapshot at all, rather
                 // than filling the disk the control plane itself runs on.
                 belowFloor = free > 0 && free < _settings.MinFreeBytes,
             },
         });
+    }
+
+    /// <summary>
+    /// Applies the retention policy now instead of waiting for the schedule.
+    /// </summary>
+    /// <remarks>
+    /// Queued like everything else rather than run inline: the same
+    /// single-file execution that keeps the scheduled sweep away from a dump in
+    /// progress has to hold for a hurried one, and an operator clicking this
+    /// because the disk is filling is exactly when a restore might be running.
+    /// </remarks>
+    [HttpPost("snapshots/prune")]
+    public async Task<IActionResult> Prune(CancellationToken ct)
+    {
+        var already = await _db.Jobs.AnyAsync(
+            j => j.Kind == JobKind.Prune && (j.State == JobState.Queued || j.State == JobState.Running), ct);
+        if (already) return Conflict(new { error = "A prune is already queued or running." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Prune, tenantId: null, tenantSlug: null, createdBy: OperatorIdentity.Of(User), ct: ct);
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
     }
 
     /// <summary>Takes a dump of this tenant now. Returns the job that is doing it.</summary>

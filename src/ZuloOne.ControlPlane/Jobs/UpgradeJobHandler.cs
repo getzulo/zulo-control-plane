@@ -155,6 +155,28 @@ public sealed class UpgradeJobHandler : IJobHandler
         Tenant tenant, string fromTag, string toTag, JobContext context, CancellationToken ct)
     {
         Directory.CreateDirectory(_snapshots.Path);
+
+        // The same floor SnapshotJobHandler enforces, and it was missing here —
+        // so the one snapshot nobody can skip was also the one able to fill the
+        // disk that floor exists to protect. Refusing costs an upgrade that has
+        // not started yet; not refusing costs the volume every other tenant's
+        // rollback lives on.
+        try
+        {
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_snapshots.Path))!);
+            if (drive.AvailableFreeSpace < _snapshots.MinFreeBytes)
+                throw new InvalidOperationException(
+                    $"Only {drive.AvailableFreeSpace / 1024 / 1024} MB free on the snapshot volume, below the "
+                  + $"{_snapshots.MinFreeBytes / 1024 / 1024} MB floor. Prune snapshots first — an upgrade whose "
+                  + "rollback cannot be written is not one.");
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            // An unreadable drive must not block an upgrade; the dump below fails
+            // loudly enough on its own if there is genuinely no room.
+            await context.LogAsync($"Could not read free space on the snapshot volume: {ex.Message}", ct);
+        }
+
         var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
         var fileName = $"{tenant.Slug}-{stamp}-preupgrade.dump";
         var destination = Path.Combine(_snapshots.Path, fileName);

@@ -32,6 +32,17 @@ public enum JobKind
 
     /// <summary>Hand the Patroni leader role to another node.</summary>
     Switchover,
+
+    /// <summary>
+    /// Apply the snapshot retention policy and reconcile the directory against the
+    /// registry.
+    /// </summary>
+    /// <remarks>
+    /// A job rather than a bare timer, deliberately. <c>JobWorker</c> runs one job
+    /// at a time, and that serialisation is the only thing keeping a delete away
+    /// from the <c>pg_dump</c> writing a file or the <c>pg_restore</c> reading one.
+    /// </remarks>
+    Prune,
 }
 
 /// <summary>

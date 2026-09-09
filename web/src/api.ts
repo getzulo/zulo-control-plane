@@ -77,7 +77,10 @@ export interface Tenant {
 }
 
 export type JobState = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
-export type JobKind = 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover';
+export type JobKind =
+  | 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover'
+  /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
+  | 'Prune';
 
 export interface Job {
   id: string;
@@ -166,9 +169,13 @@ export interface TenantStats {
 
 export interface SnapshotList {
   snapshots: Snapshot[];
+  /** Every row, not just the ones returned — the list is capped at 200. */
+  totalCount: number;
+  truncated: boolean;
   disk: {
     freeBytes: number;
     totalBytes: number;
+    /** Summed over EVERY row in the database, not the page above. */
     usedBySnapshots: number;
     minFreeBytes: number;
     /** Below this the server refuses to start a snapshot at all. */
@@ -190,7 +197,8 @@ export interface Snapshot {
   onDisk: boolean;
 }
 
-export interface ImageTag {  tag: string;
+export interface ImageTag {
+  tag: string;
   image: string;
   inUseBy: string[];
   isDefault: boolean;
@@ -435,6 +443,9 @@ export const api = {
   removeImage: (tag: string) =>
     request<{ success: boolean; digest: string; removed: string[]; note: string }>(
       `/api/images/${encodeURIComponent(tag)}?confirmTag=${encodeURIComponent(tag)}`, { method: 'DELETE' }),
+
+  /** Apply the retention policy now rather than at the next scheduled sweep. */
+  prune: () => request<{ jobId: string }>('/api/snapshots/prune', { method: 'POST' }),
 
   /** Snapshots first — that snapshot is the only way back past a migration. */
   upgrade: (tenantId: string, imageTag: string) =>

@@ -3,8 +3,8 @@ import {
   ActionIcon, Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select,
   Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowBackUp, IconRestore, IconTrash } from '@tabler/icons-react';
-import { api, type Cluster, type Snapshot, type SnapshotList, type Tenant } from './api';
+import { IconAlertTriangle, IconArrowBackUp, IconBroom, IconRestore, IconTrash } from '@tabler/icons-react';
+import { api, type Cluster, type SettingGroup, type Snapshot, type SnapshotList, type Tenant } from './api';
 import { JobProgress, fmt, fmtBytes, useJob, usePoll } from './shared';
 
 const KIND_COLOR: Record<string, string> = { Manual: 'blue', PreUpgrade: 'orange', PreSwap: 'grape' };
@@ -12,6 +12,12 @@ const KIND_COLOR: Record<string, string> = { Manual: 'blue', PreUpgrade: 'orange
 export function SnapshotsPage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [disk, setDisk] = useState<SnapshotList['disk'] | null>(null);
+  const [list, setList] = useState<SnapshotList | null>(null);
+  const [pruning, setPruning] = useState(false);
+  // The policy, read from the SERVER rather than restated here — the
+  // numbers live in SettingsCatalog and are editable on the Settings screen,
+  // so a copy in this file would be wrong the first time somebody changed one.
+  const [retention, setRetention] = useState({ keep: 3, days: 7 });
   const [cluster, setCluster] = useState<Cluster | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +32,15 @@ export function SnapshotsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, t, c] = await Promise.all([api.snapshots(), api.listTenants(), api.cluster()]);
-      setSnapshots(s.snapshots); setDisk(s.disk); setTenants(t); setCluster(c); setError(null);
+      const [s, t, c, cfg] = await Promise.all([
+        api.snapshots(), api.listTenants(), api.cluster(), api.settings().catch(() => null),
+      ]);
+      setSnapshots(s.snapshots); setDisk(s.disk); setList(s); setTenants(t); setCluster(c); setError(null);
+      if (cfg) {
+        const flat = cfg.groups.flatMap((g: SettingGroup) => g.settings);
+        const num = (k: string, f: number) => Number(flat.find((d) => d.key === k)?.effective ?? f) || f;
+        setRetention({ keep: num('Snapshots:KeepPerTenant', 3), days: num('Snapshots:KeepDays', 7) });
+      }
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   }, []);
@@ -149,8 +162,29 @@ export function SnapshotsPage() {
                   color={disk.belowFloor ? 'red' : 'blue'}
                 />
                 <Text size="xs" c="dimmed" mt={4}>
-                  {fmtBytes(disk.usedBySnapshots)} in snapshots · {fmtBytes(disk.totalBytes)} total
+                  {fmtBytes(disk.usedBySnapshots)} in {list?.totalCount ?? 0} snapshot(s) · {fmtBytes(disk.totalBytes)} total
                 </Text>
+
+                {/* The policy in words, where the disk figure is. An operator
+                    deciding whether to prune needs to know what pruning would
+                    actually remove, and "keep 3" is meaningless without "manual
+                    ones are kept for ever" beside it. */}
+                <Text size="xs" c="dimmed" mt={8}>
+                  Kept automatically: the newest {retention.keep} per tenant, plus everything under{' '}
+                  {retention.days} days. <b>Manual snapshots are never removed</b> — taking one by hand is how a
+                  state is pinned for good.
+                </Text>
+                <Button
+                  size="xs" variant="light" mt={8} leftSection={<IconBroom size={14} />} loading={pruning}
+                  onClick={async () => {
+                    setPruning(true);
+                    try { setJobId((await api.prune()).jobId); }
+                    catch (e) { setError((e as Error).message); }
+                    finally { setPruning(false); }
+                  }}
+                >
+                  Prune now
+                </Button>
                 {disk.belowFloor && (
                   // Stated BEFORE somebody tries. The server refuses below the
                   // floor rather than filling the disk it runs on, and finding
