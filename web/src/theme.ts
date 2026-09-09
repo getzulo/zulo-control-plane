@@ -83,6 +83,10 @@ export const theme = createTheme({
     ActionIcon: { defaultProps: { radius: 'md' } },
     // Light by default: a screen where every action is a filled accent button has
     // no emphasis left for the one action that matters.
+    //
+    // The upper-casing is turned off in theme.css rather than here — Mantine puts
+    // it on the badge ROOT class, and a rule is something that can be verified in
+    // the emitted stylesheet. A caller passing tt= still wins, being inline.
     Badge: { defaultProps: { radius: 'sm', variant: 'light' } },
 
     TextInput: { defaultProps: { radius: 'md' } },

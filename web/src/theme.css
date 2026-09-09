@@ -37,6 +37,16 @@ body {
   background: var(--zo-canvas);
 }
 
+/* Badges hold slugs, image tags and status names here — the things whose case
+   carries meaning. Mantine upper-cases them on the badge ROOT, which turned
+   `Total: 1` into `TOTAL: 1` and `2026.0.33` into shouting. Overridden as a rule
+   rather than a default prop so it is visible in the emitted stylesheet; a
+   caller passing tt= still wins, being inline. */
+.mantine-Badge-root {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* Tables: rules between rows, not around every cell. The border-heavy default
    competes with the card that already contains it. */
 .mantine-Table-table tbody tr td {

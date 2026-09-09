@@ -81,7 +81,11 @@ export default function App() {  const auth = useAuth();
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        <ScrollArea>
+        {/* grow + a separate section below it, so the stamp sits on the FLOOR of
+            the sidebar rather than immediately under the last link. Inside the
+            ScrollArea it just trailed the nav, which on a six-item menu left it
+            stranded in the middle of an empty column. */}
+        <AppShell.Section grow component={ScrollArea}>
           {NAV.map((n) => {
             const active = n.end
               ? location.pathname === n.to
@@ -98,11 +102,13 @@ export default function App() {  const auth = useAuth();
               />
             );
           })}
-        </ScrollArea>
-        {/* Pinned to the bottom of the sidebar, on every screen. A bug report
-            that names a screen but not a build is a bug report nobody can act
-            on, and asking for it after the fact never works. */}
-        <BuildStamp />
+        </AppShell.Section>
+        <AppShell.Section pt="xs" px={6}>
+          {/* On every screen. A bug report that names a screen but not a build is
+              a bug report nobody can act on, and asking for it after the fact
+              never works. */}
+          <BuildStamp />
+        </AppShell.Section>
       </AppShell.Navbar>
       <AppShell.Main>
         <Routes>
