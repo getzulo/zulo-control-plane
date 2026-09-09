@@ -3,7 +3,7 @@ import {
   ActionIcon, Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select,
   Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowBackUp, IconBroom, IconRestore, IconTrash } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowBackUp, IconEraser, IconRestore, IconTrash } from '@tabler/icons-react';
 import { api, type Cluster, type SettingGroup, type Snapshot, type SnapshotList, type Tenant } from './api';
 import { JobProgress, fmt, fmtBytes, useJob, usePoll } from './shared';
 
@@ -175,7 +175,7 @@ export function SnapshotsPage() {
                   state is pinned for good.
                 </Text>
                 <Button
-                  size="xs" variant="light" mt={8} leftSection={<IconBroom size={14} />} loading={pruning}
+                  size="xs" variant="light" mt={8} leftSection={<IconEraser size={14} />} loading={pruning}
                   onClick={async () => {
                     setPruning(true);
                     try { setJobId((await api.prune()).jobId); }
