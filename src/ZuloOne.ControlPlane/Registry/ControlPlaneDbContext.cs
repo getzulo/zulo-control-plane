@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
 
 namespace ZuloOne.ControlPlane.Registry;
@@ -21,6 +22,9 @@ public class ControlPlaneDbContext : DbContext
 
     /// <summary>Every long-running operation the panel has performed, and its outcome.</summary>
     public DbSet<Job> Jobs => Set<Job>();
+
+    /// <summary>Each database node's last self-check, keyed by hostname.</summary>
+    public DbSet<NodeHealth> NodeHealth => Set<NodeHealth>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

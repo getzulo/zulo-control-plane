@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
 using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
@@ -59,6 +60,12 @@ builder.Services.AddDbContext<ControlPlaneDbContext>(options =>
 builder.Services.Configure<FleetSettings>(builder.Configuration.GetSection("Fleet"));
 builder.Services.Configure<TenantDatabaseSettings>(builder.Configuration.GetSection("TenantDatabase"));
 builder.Services.Configure<ControlPlaneMailSettings>(builder.Configuration.GetSection("Mail"));
+builder.Services.Configure<PatroniSettings>(builder.Configuration.GetSection("Patroni"));
+
+// Patroni answers in milliseconds when it answers at all; a node that is down must
+// fail fast so the client can try the next one rather than stall the whole page.
+builder.Services.AddHttpClient("patroni", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddScoped<PatroniClient>();
 
 // Docker is how tenants actually run. Docker:Host lets the daemon be reached
 // through a socket proxy later (§12) without touching this code.
