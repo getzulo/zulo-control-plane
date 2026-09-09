@@ -55,10 +55,23 @@ public sealed class AdoptJobHandler : IJobHandler
             ?? throw new InvalidOperationException($"Tenant {id} is no longer in the registry.");
 
         await context.StepAsync($"Taking over the credentials for {tenant.DatabaseRole}", 15, ct);
-        // Generated here and stored; the previous password is discarded because
-        // nothing recorded it. Everything still connecting with the old one — only
-        // the existing container — is replaced below.
-        var password = await _databases.ResetPasswordAsync(tenant.DatabaseRole!, ct);
+        string password;
+        try
+        {
+            password = await _databases.ResetPasswordAsync(tenant.DatabaseRole!, ct);
+        }
+        catch (Npgsql.PostgresException ex) when (ex.SqlState == "42501")
+        {
+            // PostgreSQL 16+ requires ADMIN OPTION on a role to alter it; plain
+            // membership is not enough, and the panel cannot grant itself the
+            // option. That is the correct boundary — it must not be able to seize
+            // an arbitrary role — so this needs one deliberate act by a superuser
+            // and the message says exactly which.
+            throw new InvalidOperationException(
+                $"Not allowed to change the password of '{tenant.DatabaseRole}'. Membership alone does not permit it. " +
+                $"Run once as a superuser:  GRANT \"{tenant.DatabaseRole}\" TO \"{_databases.AdminUserName}\" WITH ADMIN OPTION;  then adopt again. " +
+                $"The tenant has not been touched.", ex);
+        }
         tenant.DatabasePassword = password;
         await _db.SaveChangesAsync(ct);
 

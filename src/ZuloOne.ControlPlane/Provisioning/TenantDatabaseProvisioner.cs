@@ -244,6 +244,9 @@ public sealed class TenantDatabaseProvisioner
         => ExecuteAsync(admin,
             $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
 
+    /// <summary>The role the control plane connects as — named in adoption errors.</summary>
+    public string AdminUserName => _settings.AdminUser;
+
     /// <summary>
     /// Replaces a tenant role's password and returns the new one.
     ///

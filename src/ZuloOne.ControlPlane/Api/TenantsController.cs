@@ -227,9 +227,42 @@ public class TenantsController : ControllerBase
     }
 
     /// <summary>
+    /// Stops managing a tenant WITHOUT touching it: the registry row goes, the
+    /// container keeps running and the database is left alone.
+    ///
+    /// <para>
+    /// This exists because deletion and disowning are different intentions that
+    /// looked identical. An adoption that fails partway leaves a registry row
+    /// describing a tenant the panel does not own — and the only way to clear it
+    /// was DELETE, which drops the database the row points at. That is how a
+    /// hand-deployed tenant's database was destroyed while undoing a failed
+    /// REGISTRATION; recovering it took a point-in-time restore.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/release")]
+    public async Task<IActionResult> Release(Guid id, [FromQuery] string? confirmSlug, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant == null) return NotFound(new { error = "Tenant not found", id });
+        if (!string.Equals(confirmSlug, tenant.Slug, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Pass confirmSlug={tenant.Slug} to confirm. Its data and container are NOT touched." });
+
+        _db.Tenants.Remove(tenant);
+        await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Released {Slug} — the registry row is gone; its container and database were left running", tenant.Slug);
+        return Ok(new
+        {
+            success = true,
+            released = tenant.Slug,
+            note = "The container and database were left as they are. The panel no longer manages this tenant.",
+        });
+    }
+
+    /// <summary>
     /// Destroys the tenant: container, database and role, then the registry row.
-    /// Irreversible — there is no backup step yet (§9 is Phase 2), so the caller
-    /// must confirm the slug it means to destroy.
+    /// Irreversible — the caller must confirm the slug it means to destroy.
+    ///
+    /// To stop managing a tenant WITHOUT destroying it, use <see cref="Release"/>.
     /// </summary>
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, [FromQuery] string? confirmSlug, CancellationToken ct)
@@ -238,6 +271,17 @@ public class TenantsController : ControllerBase
         if (tenant == null) return NotFound(new { error = "Tenant not found", id });
         if (!string.Equals(confirmSlug, tenant.Slug, StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Pass confirmSlug={tenant.Slug} to confirm this deletes the tenant and its data." });
+
+        // A row whose adoption never completed describes a tenant the panel does not
+        // own — its database and container predate the registry entirely. Deleting
+        // through this path would destroy someone else's data to clean up our own
+        // failed bookkeeping, so it is refused and pointed at /release.
+        if (tenant.Status == TenantStatus.Provisioning && tenant.RestoredFromSlug is null && tenant.DatabasePassword is null)
+            return Conflict(new
+            {
+                error = $"'{tenant.Slug}' has a registry row but no credentials of ours — its adoption did not complete, " +
+                        $"so its database and container are not this panel's to destroy. Use POST /api/tenants/{id}/release to drop the row and leave it running.",
+            });
 
         await _provisioner.DeleteAsync(tenant, ct);
         return Ok(new { success = true });
