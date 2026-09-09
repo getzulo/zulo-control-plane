@@ -30,6 +30,13 @@ public class ControlPlaneDbContext : DbContext
     /// <summary>Logical dumps held on the control plane's disk.</summary>
     public DbSet<Snapshot> Snapshots => Set<Snapshot>();
 
+    /// <summary>
+    /// Configuration keys an operator has overridden in the panel. A row exists
+    /// only where a deliberate decision was made — everything else falls through
+    /// to cp.env and then to the compiled default.
+    /// </summary>
+    public DbSet<Settings.Setting> Settings => Set<Settings.Setting>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

@@ -115,6 +115,10 @@ builder.Services.AddHttpClient("registry", client => client.Timeout = TimeSpan.F
 builder.Services.Configure<SnapshotSettings>(builder.Configuration.GetSection("Snapshots"));
 builder.Services.AddScoped<PgTools>();
 
+// Singleton: the override layer is read on the provisioning path, so reads must
+// be free. Populated once after the migration below and reloaded on every write.
+builder.Services.AddSingleton<ZuloOne.ControlPlane.Settings.SettingsStore>();
+
 var app = builder.Build();
 
 // Fold the configured extras into the reserved set before anything can provision.
@@ -138,6 +142,11 @@ using (var scope = app.Services.CreateScope())
         scope.ServiceProvider,
         scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("ControlPlane.Operator"));
 }
+
+// After the migration, so the table it reads exists on a first boot. Everything
+// downstream asks the store rather than IOptions, and an empty override table
+// simply means every key falls through to cp.env exactly as before.
+await app.Services.GetRequiredService<ZuloOne.ControlPlane.Settings.SettingsStore>().ReloadAsync();
 
 // Static files BEFORE authentication: they are middleware rather than endpoints,
 // so they bypass the authorization policy entirely and the dashboard can load its

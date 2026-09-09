@@ -335,6 +335,29 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                     b.ToTable("Snapshots");
                 });
 
+            modelBuilder.Entity("ZuloOne.ControlPlane.Settings.Setting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("Settings");
+                });
+
             modelBuilder.Entity("ZuloOne.ControlPlane.Auth.OperatorSession", b =>
                 {
                     b.HasOne("ZuloOne.ControlPlane.Auth.OperatorAccount", "Account")

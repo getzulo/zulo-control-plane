@@ -20,6 +20,34 @@ export interface Health {
   startedUtc: string;
 }
 
+/**
+ * One knob, as declared in SettingsCatalog on the server. The screen renders
+ * itself from these, so adding a setting is a server-side entry and no UI change.
+ */
+export interface SettingDef {
+  key: string;
+  label: string;
+  description: string;
+  kind: 'Int' | 'Bytes' | 'Seconds' | 'Hours' | 'Days' | 'Bool' | 'Text' | 'TextList' | 'Image';
+  default: string;
+  /** False means the process read it at startup; a change needs the container recreated. */
+  runtimeEditable: boolean;
+  min?: number | null;
+  max?: number | null;
+  /** The value in force, after database over config over default. */
+  effective: string;
+  /** The override, when one exists. */
+  dbValue?: string | null;
+  /** What cp.env says — what reverting would land on. */
+  configValue?: string | null;
+  source: 'Database' | 'Config' | 'Default';
+}
+
+export interface SettingGroup {
+  group: string;
+  settings: SettingDef[];
+}
+
 export interface Tenant {
   id: string;
   slug: string;
@@ -375,6 +403,19 @@ export const api = {
 
   // ---------------------------------------------------------------- images ---
   images: () => request<Images>('/api/images'),
+
+  settings: () => request<{ groups: SettingGroup[] }>('/api/settings'),
+
+  /** All or nothing: the server validates every key before writing any. */
+  saveSettings: (writes: { key: string; value: string }[]) =>
+    request<{ success: boolean; applied: number }>('/api/settings', {
+      method: 'PUT', body: JSON.stringify(writes),
+    }),
+
+  /** Drop the override; the key falls back to cp.env and then to the default. */
+  revertSetting: (key: string) =>
+    request<{ success: boolean; effective: string; source: string }>(
+      `/api/settings/${encodeURIComponent(key)}`, { method: 'DELETE' }),
 
   /**
    * Removes the MANIFEST, so every tag on it goes. The API refuses when any of

@@ -2,7 +2,8 @@ import { NavLink as RouterNavLink, Route, Routes, useLocation } from 'react-rout
 import { AppShell, Badge, Burger, Group, NavLink, ScrollArea, Text, UnstyledButton } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
-  IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconPackages, IconServer2,
+  IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconPackages,
+  IconServer2, IconSettings,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp } from './shared';
@@ -12,6 +13,7 @@ import { TenantPage } from './Tenant';
 import { InfrastructurePage } from './Infrastructure';
 import { SnapshotsPage } from './Snapshots';
 import { ImagesPage } from './Images';
+import { SettingsPage } from './Settings';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: IconLayoutDashboard, end: true },
@@ -20,6 +22,7 @@ const NAV = [
   { to: '/backups', label: 'Backups', icon: IconDatabaseExport, end: false },
   { to: '/images', label: 'Images', icon: IconPackages, end: false },
   { to: '/activity', label: 'Activity', icon: IconActivity, end: false },
+  { to: '/settings', label: 'Settings', icon: IconSettings, end: false },
 ];
 
 export default function App() {
@@ -90,6 +93,7 @@ export default function App() {
           <Route path="/backups" element={<SnapshotsPage />} />
           <Route path="/images" element={<ImagesPage />} />
           <Route path="/activity" element={<ActivityPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           {/* Anything else is a stale bookmark; the overview is always safe. */}
           <Route path="*" element={<OverviewPage />} />
         </Routes>
