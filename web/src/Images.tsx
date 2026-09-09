@@ -63,6 +63,30 @@ export function ImagesPage() {
         </Text>
       </div>
 
+      {/* Where releases come from, stated on the screen rather than assumed.
+          The two kinds of tag look alike in a list and mean entirely different
+          things, and nothing here explained which was which or how one becomes
+          the other. */}
+      <Card withBorder padding="md">
+        <Text fw={600} mb={4}>How a build becomes a release</Text>
+        <Text size="sm" c="dimmed">
+          A <b>release</b> is created by tagging the platform repository{' '}
+          <Code>git tag vYYYY.M.P &amp;&amp; git push --tags</Code>. CI builds that tag, asserts that{' '}
+          <Code>/health</Code> reports the same version, refuses to overwrite an existing one, and publishes it.
+          Release tags are immutable — a fix means a new patch, never a rebuild of the same number.
+        </Text>
+        <Text size="sm" c="dimmed" mt={6}>
+          A <b>CI build</b> is <Code>2026.0.N</Code>. The zero is deliberate: no month is zero, so a build can never
+          collide with a release. They exist to be tested, not to be pinned to a customer.
+        </Text>
+        <Text size="sm" c="dimmed" mt={6}>
+          A CI build cannot be <i>promoted</i> into a release, and the panel deliberately offers no button for it.
+          The version is compiled INTO the assembly, so re-tagging <Code>2026.0.33</Code> as <Code>2026.9.1</Code>{' '}
+          would produce an image whose <Code>/health</Code> still said <Code>2026.0.33</Code> — precisely the
+          mismatch CI exists to prevent. A release is rebuilt from its tag.
+        </Text>
+      </Card>
+
       {error && <Alert color="red" icon={<IconAlertTriangle size={16} />} withCloseButton onClose={() => setError(null)}>{error}</Alert>}
       {images?.error && <Alert color="yellow">{images.error}</Alert>}
 

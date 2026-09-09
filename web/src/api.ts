@@ -268,6 +268,24 @@ export const api = {
    *  percentage needs two samples from the Docker stats stream. */
   stats: (id: string) => request<TenantStats>(`/api/tenants/${id}/stats`),
 
+  /** What the container REPORTS, as opposed to the tag pinned in the registry. */
+  running: (id: string) => request<{
+    reachable: boolean; version?: string | null; build?: string | null;
+    startedUtc?: string | null; pinnedImage: string; matchesPinned?: boolean; error?: string;
+  }>(`/api/tenants/${id}/running`),
+
+  tenantUsers: (id: string) =>
+    request<{ name: string; email?: string | null; active: boolean; locked: boolean }[]>(
+      `/api/tenants/${id}/users`),
+
+  /** Sets a new password and returns it ONCE. Written straight into the tenant's
+   *  database — the case this exists for is "nobody can sign in". */
+  resetPassword: (id: string, confirmSlug: string, userName?: string) =>
+    request<{ user: string; password: string; url: string; note: string }>(
+      `/api/tenants/${id}/reset-password`, {
+        method: 'POST', body: JSON.stringify({ userName: userName ?? null, confirmSlug }),
+      }),
+
   /** Shown once, then gone. Only ever set when the invitation could not be sent. */
   adminPassword: (id: string) =>
     request<{ user: string; password: string; note: string }>(

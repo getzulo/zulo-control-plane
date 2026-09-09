@@ -10,6 +10,12 @@ namespace ZuloOne.ControlPlane.Api;
 public record CreateTenantRequest(string Slug, string? DisplayName, string AdminEmail, string? ImageTag, string? Plan);
 
 /// <summary>
+/// Which account to reset, and the slug retyped to confirm. A reset is not
+/// destructive to data, but it locks out whoever is using that account now.
+/// </summary>
+public record ResetPasswordRequest(string? UserName, string ConfirmSlug);
+
+/// <summary>
 /// What an operator supplies to adopt a hand-deployed tenant. Everything but the
 /// slug is inferred: the database and role from the naming convention, the image
 /// and container id from what is actually running.
@@ -182,6 +188,103 @@ public class TenantsController : ControllerBase
         var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
         if (tenant is null) return NotFound(new { error = "Tenant not found", id });
         return Ok(await stats.ReadAsync(tenant, ct));
+    }
+
+    /// <summary>Who this tenant has, so an operator can pick before resetting.</summary>
+    [HttpGet("{id:guid}/users")]
+    public async Task<IActionResult> Users(Guid id, [FromServices] TenantAdminService admin, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        try
+        {
+            var users = await admin.ListUsersAsync(tenant, ct);
+            return Ok(users.Select(u => new { u.Name, u.Email, u.Active, u.Locked }));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = $"Could not read the tenant's users: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// Sets a new password for one of the tenant's users and shows it ONCE.
+    ///
+    /// <para>
+    /// Written straight into the tenant's database rather than through its API,
+    /// because the situation this exists for is "nobody can sign in", and an
+    /// endpoint that requires signing in cannot help with that. The panel already
+    /// holds these credentials and can drop the entire database, so this is a
+    /// narrower use of authority it has, not new authority.
+    /// </para>
+    ///
+    /// <para>
+    /// The slug is retyped. Resetting a password is not destructive to data, but it
+    /// locks out whoever is currently using that account, and doing it to the wrong
+    /// tenant is an incident.
+    /// </para>
+    /// </summary>
+    [HttpPost("{id:guid}/reset-password")]
+    public async Task<IActionResult> ResetPassword(
+        Guid id, [FromBody] ResetPasswordRequest request,
+        [FromServices] TenantAdminService admin, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        if (!string.Equals(request?.ConfirmSlug, tenant.Slug, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Retype '{tenant.Slug}' to confirm. Whoever is using that account now will be locked out." });
+
+        var (found, password, user) = await admin.ResetPasswordAsync(tenant, request?.UserName, ct);
+        if (!found)
+            return NotFound(new { error = $"No such user in '{tenant.Slug}'." });
+
+        _logger.LogWarning("Operator {Operator} reset the password of {User} on {Slug}",
+            User.Identity?.Name ?? "unknown", user, tenant.Slug);
+
+        return Ok(new
+        {
+            user,
+            password,
+            url = $"https://{_containers.HostFor(tenant.Slug)}",
+            note = "Shown once and stored nowhere. The account is unlocked and must change this at next sign-in.",
+        });
+    }
+
+    /// <summary>
+    /// What the tenant's container actually REPORTS, as opposed to the tag pinned
+    /// in the registry. The two disagree when a container was replaced outside the
+    /// panel, and that gap is worth seeing rather than assuming away.
+    /// </summary>
+    [HttpGet("{id:guid}/running")]
+    public async Task<IActionResult> Running(
+        Guid id, [FromServices] IHttpClientFactory http, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+
+        try
+        {
+            using var client = http.CreateClient("tenant");
+            var body = await client.GetStringAsync($"https://{_containers.HostFor(tenant.Slug)}/health", ct);
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var version = root.TryGetProperty("version", out var v) ? v.GetString() : null;
+            return Ok(new
+            {
+                reachable = true,
+                version,
+                build = root.TryGetProperty("build", out var b) ? b.GetString() : null,
+                startedUtc = root.TryGetProperty("startedUtc", out var s) ? s.GetString() : null,
+                pinnedImage = tenant.ImageTag,
+                // The pinned tag ends in the version the image was built with, so a
+                // mismatch means the running container is not what the registry says.
+                matchesPinned = version is not null && tenant.ImageTag.EndsWith($":{version}", StringComparison.Ordinal),
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new { reachable = false, error = ex.Message, pinnedImage = tenant.ImageTag });
+        }
     }
 
     [HttpPost("{id:guid}/stop")]    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>

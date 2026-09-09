@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, SimpleGrid, Stack, Table, Tabs, Text, TextInput, Title,
+  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Table, Tabs, Text, TextInput, Title,
 } from '@mantine/core';
 import {
-  IconAlertTriangle, IconArrowLeft, IconCamera, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash,
+  IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash,
 } from '@tabler/icons-react';
-import { api, type Job, type Snapshot, type Tenant, type TenantStats } from './api';
+import { api, type ImageTag, type Job, type Snapshot, type Tenant, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
 
 /**
@@ -41,7 +41,35 @@ export function TenantPage() {
   const [destroy, setDestroy] = useState<'delete' | 'release' | null>(null);
   const [confirm, setConfirm] = useState('');
   const [revealed, setRevealed] = useState<{ user: string; password: string } | null>(null);
+  // Upgrade and password reset, both driven from here rather than from another
+  // screen — this is the page somebody is on when they need either.
+  const [running, setRunning] = useState<Awaited<ReturnType<typeof api.running>> | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
+  const [releases, setReleases] = useState<ImageTag[]>([]);
+  const [targetImage, setTargetImage] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [users, setUsers] = useState<{ name: string; email?: string | null; locked: boolean }[]>([]);
+  const [resetUser, setResetUser] = useState<string | null>(null);
   const job = useJob(jobId);
+
+  const openUpgrade = async () => {
+    setUpgrading(true); setConfirm(''); setTargetImage(null);
+    try {
+      const i = await api.images();
+      // Releases only. A CI build is not something to pin a customer to, and
+      // offering both here would make the wrong choice one click away.
+      setReleases(i.releases.filter((r) => r.image !== tenant?.imageTag));
+    } catch (e) { setError((e as Error).message); }
+  };
+
+  const openReset = async () => {
+    setResetting(true); setConfirm(''); setResetUser(null);
+    try {
+      const u = await api.tenantUsers(id);
+      setUsers(u);
+      setResetUser(u.find((x) => x.name === 'admin')?.name ?? u[0]?.name ?? null);
+    } catch (e) { setError((e as Error).message); }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -58,6 +86,7 @@ export function TenantPage() {
   // in the path that keeps the rest of the page current.
   usePoll(useCallback(async () => {
     try { setStats(await api.stats(id)); } catch { /* shown as unavailable below */ }
+    try { setRunning(await api.running(id)); } catch { /* likewise */ }
   }, [id]), 20_000);
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -105,6 +134,21 @@ export function TenantPage() {
             onClick={async () => { try { setJobId((await api.takeSnapshot(id)).jobId); } catch (e) { setError((e as Error).message); } }}
           >
             Snapshot
+          </Button>
+          {/* The two things an operator comes to a tenant's page to do, and which
+              used to live nowhere or on another screen entirely. */}
+          <Button
+            size="xs" variant="light" color="orange" leftSection={<IconArrowUp size={14} />}
+            onClick={() => { void openUpgrade(); }}
+          >
+            Upgrade
+          </Button>
+          <Button
+            size="xs" variant="light" color="yellow" leftSection={<IconKey size={14} />}
+            disabled={!tenant.databaseName}
+            onClick={() => { void openReset(); }}
+          >
+            Reset password
           </Button>
           <Button size="xs" color="red" variant="light" leftSection={<IconTrash size={14} />}
             onClick={() => { setDestroy('delete'); setConfirm(''); }}>
@@ -184,6 +228,24 @@ export function TenantPage() {
             <Table withRowBorders={false} verticalSpacing={5} fz="sm">
               <Table.Tbody>
                 <Table.Tr><Table.Td c="dimmed">Image</Table.Td><Table.Td><Code>{tenant.imageTag}</Code></Table.Td></Table.Tr>
+                <Table.Tr>
+                  <Table.Td c="dimmed">Running</Table.Td>
+                  <Table.Td>
+                    {/* What the container REPORTS, beside the tag pinned in the
+                        registry. They disagree when a container was replaced
+                        outside the panel, and that gap is worth seeing. */}
+                    {!running ? '—' : !running.reachable ? (
+                      <Badge color="red" variant="light">not answering</Badge>
+                    ) : (
+                      <Group gap={6}>
+                        <Code>{running.version}{running.build ? ` · ${running.build}` : ''}</Code>
+                        {running.matchesPinned === false && (
+                          <Badge color="orange" variant="light">differs from the pinned tag</Badge>
+                        )}
+                      </Group>
+                    )}
+                  </Table.Td>
+                </Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Container</Table.Td><Table.Td><Code>{tenant.containerId ?? '—'}</Code></Table.Td></Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Database</Table.Td><Table.Td><Code>{tenant.databaseName ?? '—'}</Code></Table.Td></Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Administrator</Table.Td><Table.Td>{tenant.adminEmail ?? '—'}</Table.Td></Table.Tr>
@@ -269,8 +331,7 @@ export function TenantPage() {
         </Tabs>
       </Card>
 
-      <Modal opened={Boolean(revealed)} onClose={() => setRevealed(null)} title="One-time administrator password">
-        <Stack gap="sm">
+      <Modal opened={Boolean(revealed)} onClose={() => setRevealed(null)} title="One-time administrator password">        <Stack gap="sm">
           <Text size="sm">
             Already erased from the registry — closing this dialog loses it.
           </Text>
@@ -279,8 +340,7 @@ export function TenantPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={destroy !== null} onClose={() => setDestroy(null)} title={destroy === 'release' ? 'Stop managing' : 'Delete tenant'}>
-        <Stack gap="sm">
+      <Modal opened={destroy !== null} onClose={() => setDestroy(null)} title={destroy === 'release' ? 'Stop managing' : 'Delete tenant'}>        <Stack gap="sm">
           {destroy === 'delete' ? (
             <Alert color="red" icon={<IconAlertTriangle size={16} />}>
               This destroys the container, the database, the role and the key ring. Snapshots survive, and are the
@@ -312,6 +372,70 @@ export function TenantPage() {
               }}
             >
               {destroy === 'delete' ? 'Destroy it' : 'Release it'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={upgrading} onClose={() => setUpgrading(false)} title={`Upgrade ${tenant.slug}`}>
+        <Stack gap="sm">
+          <Alert color="orange" icon={<IconAlertTriangle size={16} />}>
+            A snapshot is taken first and it IS the rollback — migrations only run forward, so nothing else can undo
+            one. The tenant is unavailable while it boots: migrations, schema sync and a metadata compile run against
+            its real data. If the new image will not start, the old tag is pinned back automatically.
+          </Alert>
+          <Select
+            label="Release" placeholder="pick a version" searchable
+            description="Releases only — a CI build is not something to pin a customer to."
+            data={releases.map((r) => ({ value: r.image, label: r.tag }))}
+            value={targetImage} onChange={setTargetImage}
+          />
+          {releases.length === 0 && (
+            <Text size="xs" c="dimmed">
+              No other release is published. Releases come from a git tag; see the Images screen.
+            </Text>
+          )}
+          <TextInput label={`Type "${tenant.slug}" to confirm`} value={confirm} onChange={(e) => setConfirm(e.currentTarget.value)} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setUpgrading(false)}>Cancel</Button>
+            <Button
+              color="orange" disabled={!targetImage || confirm !== tenant.slug}
+              onClick={async () => {
+                const img = targetImage!; setUpgrading(false);
+                try { setJobId((await api.upgrade(id, img)).jobId); } catch (e) { setError((e as Error).message); }
+              }}
+            >
+              Snapshot and upgrade
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={resetting} onClose={() => setResetting(false)} title={`Reset a password on ${tenant.slug}`}>
+        <Stack gap="sm">
+          <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
+            The new password is shown <b>once</b> and stored nowhere. The account is unlocked and asked to change it
+            at the next sign-in — and whoever is using it right now will be locked out.
+          </Alert>
+          <Select
+            label="Account" searchable
+            data={users.map((u) => ({ value: u.name, label: u.email ? `${u.name} — ${u.email}` : u.name }))}
+            value={resetUser} onChange={setResetUser}
+          />
+          <TextInput label={`Type "${tenant.slug}" to confirm`} value={confirm} onChange={(e) => setConfirm(e.currentTarget.value)} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setResetting(false)}>Cancel</Button>
+            <Button
+              color="yellow" disabled={!resetUser || confirm !== tenant.slug}
+              onClick={async () => {
+                const who = resetUser!; setResetting(false);
+                try {
+                  const r = await api.resetPassword(id, tenant.slug, who);
+                  setRevealed({ user: r.user, password: r.password });
+                } catch (e) { setError((e as Error).message); }
+              }}
+            >
+              Reset it
             </Button>
           </Group>
         </Stack>
