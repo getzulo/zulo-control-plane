@@ -7,6 +7,8 @@ using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Registry;
 
+using ZuloOne.ControlPlane.Auth;
+
 namespace ZuloOne.ControlPlane.Api;
 
 /// <summary>
@@ -271,7 +273,7 @@ public class InfraController : ControllerBase
             return Conflict(new { error = $"'{candidate.Name}' is '{candidate.State}', not streaming — promoting it now risks losing writes." });
 
         _logger.LogWarning("Operator {Operator} is switching the leader from {Leader} to {Candidate}",
-            User.Identity?.Name ?? "unknown", leader.Name, candidate.Name);
+            OperatorIdentity.Describe(User), leader.Name, candidate.Name);
 
         var (ok, detail) = await _patroni.SwitchoverAsync(leader.Name, candidate.Name, ct);
         return ok

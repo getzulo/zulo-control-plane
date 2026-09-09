@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Registry;
 using ZuloOne.ControlPlane.Settings;
 
+using ZuloOne.ControlPlane.Auth;
+
 namespace ZuloOne.ControlPlane.Api;
 
 public sealed record SettingWrite(string Key, string Value);
@@ -79,8 +81,7 @@ public class SettingsController : ControllerBase
         }
         if (problems.Count > 0) return BadRequest(new { error = string.Join(" ", problems), problems });
 
-        var who = User.Identity?.Name
-            ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
+        var who = OperatorIdentity.Of(User);
 
         foreach (var write in writes)
         {

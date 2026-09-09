@@ -4,6 +4,8 @@ using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
+using ZuloOne.ControlPlane.Auth;
+
 namespace ZuloOne.ControlPlane.Api;
 
 /// <summary>What an operator supplies to create a tenant.</summary>
@@ -98,7 +100,7 @@ public class TenantsController : ControllerBase
 
             var job = await _queue.EnqueueAsync(
                 JobKind.Provision, tenant.Id, tenant.Slug,
-                createdBy: User.Identity?.Name ?? User.FindFirst("email")?.Value, ct: ct);
+                createdBy: OperatorIdentity.Of(User), ct: ct);
 
             // The job id rides along so the caller can follow the build without
             // polling the tenant row and guessing which attempt it is watching.
@@ -173,7 +175,7 @@ public class TenantsController : ControllerBase
 
         var job = await _queue.EnqueueAsync(
             JobKind.Adopt, tenant.Id, tenant.Slug,
-            createdBy: User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value, ct: ct);
+            createdBy: OperatorIdentity.Of(User), ct: ct);
         return Accepted($"/api/tenants/{tenant.Id}", new { tenant = Summary(tenant), jobId = job.Id });
     }
 
@@ -243,7 +245,7 @@ public class TenantsController : ControllerBase
             return NotFound(new { error = $"No such user in '{tenant.Slug}'." });
 
         _logger.LogWarning("Operator {Operator} reset the password of {User} on {Slug}",
-            User.Identity?.Name ?? "unknown", user, tenant.Slug);
+            OperatorIdentity.Describe(User), user, tenant.Slug);
 
         return Ok(new
         {

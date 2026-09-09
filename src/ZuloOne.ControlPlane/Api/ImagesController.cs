@@ -6,6 +6,8 @@ using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
+using ZuloOne.ControlPlane.Auth;
+
 namespace ZuloOne.ControlPlane.Api;
 
 public record UpgradeRequest(string ImageTag);
@@ -286,7 +288,7 @@ public class ImagesController : ControllerBase
 
         var job = await _queue.EnqueueAsync(
             JobKind.Upgrade, tenant.Id, tenant.Slug, new UpgradePayload(request.ImageTag),
-            User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value, ct);
+            OperatorIdentity.Of(User), ct);
         return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
     }
 
@@ -402,7 +404,7 @@ public class ImagesController : ControllerBase
             Digest = sourceDigest,
             Repository = repository,
             Notes = string.IsNullOrWhiteSpace(request?.Notes) ? null : request!.Notes!.Trim(),
-            PromotedBy = User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value,
+            PromotedBy = OperatorIdentity.Of(User),
             PromotedAt = DateTime.UtcNow,
         };
         _db.Releases.Add(release);

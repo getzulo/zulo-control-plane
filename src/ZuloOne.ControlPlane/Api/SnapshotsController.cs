@@ -5,6 +5,8 @@ using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Registry;
 using ZuloOne.ControlPlane.Snapshots;
 
+using ZuloOne.ControlPlane.Auth;
+
 namespace ZuloOne.ControlPlane.Api;
 
 public record TakeSnapshotRequest(string? Note);
@@ -45,7 +47,7 @@ public class SnapshotsController : ControllerBase
         _databases = databases;
     }
 
-    private string? Operator => User.Identity?.Name ?? User.FindFirst("email")?.Value;
+    private string? Operator => OperatorIdentity.Of(User);
 
     /// <summary>Every snapshot, or one tenant's, newest first — plus the disk they live on.</summary>
     [HttpGet("snapshots")]
