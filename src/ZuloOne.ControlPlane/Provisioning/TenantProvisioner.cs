@@ -197,6 +197,9 @@ public sealed class TenantProvisioner
 
         if (!string.IsNullOrWhiteSpace(tenant.ContainerId))
             await _containers.RemoveAsync(tenant.ContainerId!, ct);
+        // Only HERE, never on a recreate: the ring is what makes the tenant's stored
+        // secrets readable, and it must outlive every upgrade.
+        await _containers.RemoveVolumeAsync(tenant.Slug, ct);
         await _databases.DropAsync(tenant.DatabaseName, tenant.DatabaseRole, ct);
 
         _db.Tenants.Remove(tenant);

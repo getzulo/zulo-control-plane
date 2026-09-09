@@ -69,6 +69,21 @@ public sealed class AdoptJobHandler : IJobHandler
 
         await context.StepAsync($"Recreating the container on {tenant.ImageTag}", 50, ct);
         var connectionString = _databases.TenantConnectionString(tenant.DatabaseName!, tenant.DatabaseRole!, password);
+
+        // Remove the ORIGINAL container by id first.
+        //
+        // RunAsync only clears a container named `zuloone-tenant-<slug>`, and a
+        // hand-deployed one is named whatever deployed it — the first tenant here
+        // came from a compose stack and is `zuloone-prod-tenant-t1-1`. Leaving it
+        // running would put TWO containers behind Traefik routers matching the same
+        // Host rule, with nothing deciding which serves the tenant.
+        var original = tenant.ContainerId;
+        if (!string.IsNullOrWhiteSpace(original))
+        {
+            await _containers.RemoveAsync(original!, ct);
+            await context.LogAsync($"Removed the original container {original![..Math.Min(12, original.Length)]}.", ct);
+        }
+
         tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
         await _db.SaveChangesAsync(ct);
 

@@ -92,6 +92,19 @@ public sealed class TenantContainerService
                 Memory = _fleet.MemoryLimitBytes,
                 NanoCPUs = _fleet.CpuLimit > 0 ? (long)(_fleet.CpuLimit * 1_000_000_000m) : 0,
                 NetworkMode = _fleet.EdgeNetwork,
+                // The data-protection key ring, on a named volume per tenant.
+                //
+                // Without it the ring lives in the container's own filesystem, and
+                // every recreate mints a new one — which silently makes everything
+                // the tenant encrypted with the old ring unreadable. Its stored
+                // assistant API keys are exactly that. The failure surfaces long
+                // after the change that caused it, as "the key I saved stopped
+                // working", with an upgrade somewhere in the history.
+                //
+                // Docker creates the volume on first use, so this needs no
+                // provisioning step; it is deliberately NOT removed with the
+                // container, only with the tenant.
+                Binds = [$"zuloone-dp-{tenant.Slug}:/var/zuloone/dp-keys"],
             },
         }, ct);
 
@@ -152,6 +165,31 @@ public sealed class TenantContainerService
         }
         catch (DockerContainerNotFoundException) { /* already gone */ }
         catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
+
+    /// <summary>
+    /// Removes the tenant's data-protection volume.
+    ///
+    /// Deliberately separate from removing the container: a container is removed on
+    /// every upgrade, and taking the key ring with it would make everything the
+    /// tenant encrypted unreadable. Only destroying the TENANT destroys the ring.
+    /// </summary>
+    public async Task RemoveVolumeAsync(string slug, CancellationToken ct = default)
+    {
+        try
+        {
+            await _docker.Volumes.RemoveAsync($"zuloone-dp-{slug}", force: true, ct);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Never created, or already gone. Both are the desired end state.
+        }
+        catch (Exception ex)
+        {
+            // Not worth failing a teardown over: the database and the container are
+            // what hold the data, and an orphaned volume is a few kilobytes of keys.
+            _logger.LogWarning(ex, "Could not remove the data-protection volume for {Slug}", slug);
+        }
     }
 
     /// <summary>Recent stdout/stderr, for the per-tenant drawer in the dashboard.</summary>
