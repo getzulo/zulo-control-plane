@@ -178,13 +178,34 @@ public sealed class TenantDatabaseProvisioner
         await using var admin = new NpgsqlConnection(AdminConnectionString());
         await admin.OpenAsync(ct);
 
-        // Both, and not only the live one: the scratch copy's own container was just
-        // stopped, and a lingering pooled session blocks its rename too.
-        foreach (var database in new[] { liveDatabase, scratchDatabase })
+        // ---- everything reversible first ------------------------------------
+        // Ownership moves while the copy is still called by its own name and the
+        // live database has not been touched. If any of this fails, nothing has
+        // happened yet: the live tenant still has its data under its own name, and
+        // the operator can simply try again.
+        //
+        // Doing it the other way round — rename, then reassign — put the only
+        // fragile part AFTER the irreversible one, so a failure left the data moved
+        // and the permissions not. Measured, once, exactly that.
+        await Terminate(admin, scratchDatabase, ct);
+        await ExecuteAsync(admin, $"ALTER DATABASE \"{scratchDatabase}\" OWNER TO \"{liveRole}\"", ct);
+
+        await using (var inScratch = new NpgsqlConnection(AdminConnectionString(scratchDatabase)))
         {
-            await ExecuteAsync(admin,
-                $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
+            await inScratch.OpenAsync(ct);
+            await ExecuteAsync(inScratch, $"REASSIGN OWNED BY \"{scratchRole}\" TO \"{liveRole}\"", ct);
+            // Whatever REASSIGN leaves is a privilege rather than an object; without
+            // dropping those the scratch role cannot be removed afterwards.
+            await ExecuteAsync(inScratch, $"DROP OWNED BY \"{scratchRole}\"", ct);
+            await ExecuteAsync(inScratch, $"GRANT ALL ON SCHEMA public TO \"{liveRole}\"", ct);
         }
+
+        // ---- and only now the irreversible part ------------------------------
+        // Two statements, back to back. ALTER DATABASE ... RENAME cannot run inside
+        // a transaction, so there is a window — now as small as it can be made —
+        // where the live name does not exist.
+        await Terminate(admin, liveDatabase, ct);
+        await Terminate(admin, scratchDatabase, ct);
 
         await ExecuteAsync(admin, $"ALTER DATABASE \"{liveDatabase}\" RENAME TO \"{archiveDatabase}\"", ct);
         try
@@ -209,20 +230,19 @@ public sealed class TenantDatabaseProvisioner
                     $"ALTER DATABASE \"{archiveDatabase}\" RENAME TO \"{liveDatabase}\"; — original cause: {ex.Message}", ex);
             }
         }
-
-        // The database now carries the live name but is still owned by the scratch
-        // role, and every object inside it with it. Both must move, or the live
-        // tenant cannot alter its own tables and dropping the scratch role fails.
-        await ExecuteAsync(admin, $"ALTER DATABASE \"{liveDatabase}\" OWNER TO \"{liveRole}\"", ct);
-
-        await using var inTenant = new NpgsqlConnection(AdminConnectionString(liveDatabase));
-        await inTenant.OpenAsync(ct);
-        await ExecuteAsync(inTenant, $"REASSIGN OWNED BY \"{scratchRole}\" TO \"{liveRole}\"", ct);
-        // Whatever REASSIGN does not move is a privilege rather than an object;
-        // without dropping those the role cannot be removed afterwards.
-        await ExecuteAsync(inTenant, $"DROP OWNED BY \"{scratchRole}\"", ct);
-        await ExecuteAsync(inTenant, $"GRANT ALL ON SCHEMA public TO \"{liveRole}\"", ct);
     }
+
+    /// <summary>
+    /// Clears a database of sessions so it can be renamed or dropped.
+    /// </summary>
+    /// <remarks>
+    /// This is why <see cref="AdminConnectionString"/> disables pooling: the
+    /// backends killed here include Npgsql's own idle pooled connections for the
+    /// same database, and the pool would go on handing them out.
+    /// </remarks>
+    private static Task Terminate(NpgsqlConnection admin, string database, CancellationToken ct)
+        => ExecuteAsync(admin,
+            $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database.Replace("'", "''")}'", ct);
 
     /// <summary>Drops one database outright — the explicit discard of a kept copy.</summary>
     public async Task DropDatabaseAsync(string database, CancellationToken ct = default)
@@ -247,6 +267,24 @@ public sealed class TenantDatabaseProvisioner
         var ssl = _settings.RequireSsl ? "SSL Mode=Require;Trust Server Certificate=true;" : string.Empty;
         return $"Host={_settings.Host};Port={_settings.Port};Database={database ?? _settings.AdminDatabase};"
              + $"Username={_settings.AdminUser};Password={_settings.AdminPassword};{ssl}"
+             // Pooling OFF, deliberately.
+             //
+             // Every one of these connections belongs to a rare administrative
+             // operation — create a database, drop one, swap two — and several of
+             // them call pg_terminate_backend to clear a database before renaming or
+             // dropping it. That terminates connections SERVER-side, including
+             // Npgsql's own idle pooled ones for the same connection string. The pool
+             // does not notice, hands the dead handle to the next caller, and the
+             // very next statement fails with:
+             //
+             //   57P01: terminating connection due to administrator command
+             //
+             // Observed exactly that mid-swap: both databases had already been
+             // renamed, and the failure landed on the ownership transfer afterwards
+             // — the worst possible place, because the data had moved but the
+             // permissions had not. There is no hot path here to protect, so the
+             // pool buys nothing and costs correctness.
+             + "Pooling=false;"
              + TargetPrimary(_settings.Host);
     }
 
