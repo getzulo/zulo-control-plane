@@ -10,6 +10,8 @@ namespace ZuloOne.ControlPlane.Api;
 
 public record UpgradeRequest(string ImageTag);
 
+public record PromoteRequest(string? Version, string? Notes);
+
 /// <summary>
 /// What the fleet can run, and moving a tenant onto it.
 /// </summary>
@@ -286,6 +288,183 @@ public class ImagesController : ControllerBase
             JobKind.Upgrade, tenant.Id, tenant.Slug, new UpgradePayload(request.ImageTag),
             User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value, ct);
         return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
+    }
+
+    /// <summary>
+    /// Turns a CI build into a release: the same manifest, under a CalVer tag.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the whole release procedure. Until now it was <c>git tag vYYYY.M.P
+    /// &amp;&amp; git push --tags</c> and a wait for CI to rebuild — which meant
+    /// leaving the panel, and meant the released image was BUILT AGAIN rather than
+    /// being the artefact that had just been tested.
+    /// </para>
+    ///
+    /// <para>
+    /// Promotion copies no bytes. It reads the manifest by its build tag and PUTs
+    /// the identical document under the release tag, so both names resolve to one
+    /// digest — verified on this registry: source and promoted digests came back
+    /// equal, and the PUT answered 201.
+    /// </para>
+    ///
+    /// <para>
+    /// The consequence is worth stating where an operator will read it: the two
+    /// tags are one image and cannot be separated. Deleting either removes it from
+    /// under both. <see cref="Delete"/> already refuses on exactly that basis.
+    /// </para>
+    /// </remarks>
+    [HttpPost("{tag}/promote")]
+    public async Task<IActionResult> Promote(string tag, [FromBody] PromoteRequest? request, CancellationToken ct)
+    {
+        var (registry, repository) = SplitImage(_fleet.DefaultImage);
+        if (registry is null)
+            return BadRequest(new { error = "Fleet:DefaultImage does not name a registry." });
+
+        if (IsRelease(tag))
+            return BadRequest(new { error = $"'{tag}' is already a release. A release is promoted from a build." });
+
+        using var client = _http.CreateClient("registry");
+
+        // Accept matters: without these the registry answers with the v1 schema,
+        // whose digest is not the one the fleet would pull.
+        const string Accept = "application/vnd.docker.distribution.manifest.v2+json,"
+                            + "application/vnd.oci.image.manifest.v1+json,"
+                            + "application/vnd.docker.distribution.manifest.list.v2+json,"
+                            + "application/vnd.oci.image.index.v1+json";
+
+        HttpResponseMessage source;
+        try
+        {
+            using var read = new HttpRequestMessage(HttpMethod.Get, $"http://{registry}/v2/{repository}/manifests/{tag}");
+            read.Headers.TryAddWithoutValidation("Accept", Accept);
+            source = await client.SendAsync(read, ct);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = $"Could not read the registry: {ex.Message}" });
+        }
+
+        if (source.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return NotFound(new { error = $"'{tag}' is not in {repository}." });
+        if (!source.IsSuccessStatusCode)
+            return StatusCode(StatusCodes.Status502BadGateway,
+                new { error = $"The registry answered {(int)source.StatusCode} for '{tag}'." });
+
+        var body = await source.Content.ReadAsByteArrayAsync(ct);
+        var mediaType = source.Content.Headers.ContentType?.ToString();
+        var sourceDigest = source.Headers.TryGetValues("Docker-Content-Digest", out var d) ? d.FirstOrDefault() : null;
+        if (string.IsNullOrWhiteSpace(mediaType) || string.IsNullOrWhiteSpace(sourceDigest))
+            return StatusCode(StatusCodes.Status502BadGateway,
+                new { error = $"The registry did not return a manifest for '{tag}'." });
+
+        var version = string.IsNullOrWhiteSpace(request?.Version)
+            ? await NextVersionAsync(registry, repository, ct)
+            : request!.Version!.Trim();
+
+        if (!IsRelease(version))
+            return BadRequest(new { error = $"'{version}' is not a release version. Required shape: YYYY.M.P, month 1-12." });
+
+        // Immutable, and this is the check that makes them so. A release tag that
+        // can be moved is a version number that means nothing — a tenant pinned to
+        // it would silently change what it runs.
+        var existing = await _db.Releases.FirstOrDefaultAsync(r => r.Version == version && r.Repository == repository, ct);
+        if (existing is not null)
+            return Conflict(new
+            {
+                error = $"{version} was already released on {existing.PromotedAt:yyyy-MM-dd} from {existing.SourceTag}. "
+                      + "Releases are immutable — promote to a new patch instead.",
+            });
+
+        using var head = new HttpRequestMessage(HttpMethod.Head, $"http://{registry}/v2/{repository}/manifests/{version}");
+        head.Headers.TryAddWithoutValidation("Accept", Accept);
+        using var occupied = await client.SendAsync(head, ct);
+        if (occupied.IsSuccessStatusCode)
+            return Conflict(new { error = $"The registry already holds {repository}:{version}, with no release recorded for it." });
+
+        using var write = new HttpRequestMessage(HttpMethod.Put, $"http://{registry}/v2/{repository}/manifests/{version}")
+        {
+            Content = new ByteArrayContent(body),
+        };
+        write.Content.Headers.TryAddWithoutValidation("Content-Type", mediaType);
+        using var written = await client.SendAsync(write, ct);
+        if (!written.IsSuccessStatusCode)
+        {
+            var detail = await written.Content.ReadAsStringAsync(ct);
+            return StatusCode(StatusCodes.Status502BadGateway,
+                new { error = $"The registry rejected the release tag ({(int)written.StatusCode}): {detail}" });
+        }
+
+        var release = new Release
+        {
+            Version = version,
+            SourceTag = tag,
+            Digest = sourceDigest,
+            Repository = repository,
+            Notes = string.IsNullOrWhiteSpace(request?.Notes) ? null : request!.Notes!.Trim(),
+            PromotedBy = User.Identity?.Name ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value,
+            PromotedAt = DateTime.UtcNow,
+        };
+        _db.Releases.Add(release);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            success = true,
+            version,
+            image = $"{registry}/{repository}:{version}",
+            digest = sourceDigest,
+            promotedFrom = tag,
+            note = "Same manifest, second name — the bytes that were tested are the bytes that ship.",
+        });
+    }
+
+    /// <summary>Releases, newest first.</summary>
+    [HttpGet("/api/releases")]
+    public async Task<IActionResult> Releases(CancellationToken ct)
+    {
+        var (_, repository) = SplitImage(_fleet.DefaultImage);
+        var rows = await _db.Releases.AsNoTracking()
+            .Where(r => r.Repository == repository)
+            .ToListAsync(ct);
+        return Ok(rows.OrderByDescending(r => r.Version, CalVer));
+    }
+
+    /// <summary>
+    /// The next patch in the current month — 2026.9.4 becomes 2026.9.5, and the
+    /// first release of a new month starts at .0.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the REGISTRY rather than from the release table, because the
+    /// registry is what a collision would actually be with. A tag can exist
+    /// without a release row (anything cut before this endpoint existed).
+    /// </remarks>
+    private async Task<string> NextVersionAsync(string registry, string repository, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var prefix = $"{now.Year}.{now.Month}.";
+
+        List<string> tags = [];
+        try
+        {
+            using var client = _http.CreateClient("registry");
+            var json = await client.GetStringAsync($"http://{registry}/v2/{repository}/tags/list", ct);
+            if (JsonDocument.Parse(json).RootElement.TryGetProperty("tags", out var t) && t.ValueKind == JsonValueKind.Array)
+                tags = t.EnumerateArray().Select(x => x.GetString() ?? string.Empty).ToList();
+        }
+        catch
+        {
+            // Unreadable registry is reported by the caller's own request; here it
+            // only means the suggestion starts from zero.
+        }
+
+        var highest = tags
+            .Where(x => x.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(x => int.TryParse(x[prefix.Length..], out var p) ? p : -1)
+            .DefaultIfEmpty(-1)
+            .Max();
+
+        return $"{prefix}{highest + 1}";
     }
 
     /// <summary><c>host:port/repo:tag</c> → registry and repository.</summary>

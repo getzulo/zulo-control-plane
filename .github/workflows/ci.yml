@@ -148,8 +148,16 @@ jobs:
           else
             # Minor 0 is the sentinel for "not a release": zero is never a month,
             # so CI versions and release versions cannot collide.
+            #
+            # Published unconditionally. It used to publish only on a manual
+            # dispatch, which meant the newest build existed solely in the
+            # runner's local daemon: the panel could not see it, could not move a
+            # tenant onto it, and — now that a release is made by PROMOTING a
+            # build — could not release it either. The registry is 930 MB across
+            # 49 tags on a disk with 89 GB free, and the panel can delete what
+            # nothing uses.
             echo "version=$(date -u +%Y).0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-            echo "publish=${{ github.event_name == 'workflow_dispatch' }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
       # Tags are pinned per deployment and promised immutable. A registry will

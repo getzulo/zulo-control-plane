@@ -31,6 +31,12 @@ public class ControlPlaneDbContext : DbContext
     public DbSet<Snapshot> Snapshots => Set<Snapshot>();
 
     /// <summary>
+    /// Builds somebody decided to call releases — the decision, not the image.
+    /// The registry holds the bytes; this holds who, when, from what, and why.
+    /// </summary>
+    public DbSet<Release> Releases => Set<Release>();
+
+    /// <summary>
     /// Configuration keys an operator has overridden in the panel. A row exists
     /// only where a deliberate decision was made — everything else falls through
     /// to cp.env and then to the compiled default.

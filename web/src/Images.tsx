@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowUp, IconTrash } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowUp, IconRocket, IconTrash } from '@tabler/icons-react';
 import { api, type ImageTag, type Images, type Tenant } from './api';
 import { JobProgress, useJob, usePoll } from './shared';
 
@@ -14,6 +14,12 @@ export function ImagesPage() {
   const [upgrade, setUpgrade] = useState<{ tag: ImageTag; tenant: Tenant } | null>(null);
   const [pick, setPick] = useState<ImageTag | null>(null);
   const [remove, setRemove] = useState<ImageTag | null>(null);
+  const [promote, setPromote] = useState<ImageTag | null>(null);
+  // Its OWN state. `confirm` is shared by the delete and upgrade dialogs, and
+  // reusing it here would put a leftover tenant slug in the version box.
+  const [version, setVersion] = useState('');
+  const [notes, setNotes] = useState('');
+  const [released, setReleased] = useState<string | null>(null);
   const [confirm, setConfirm] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJob(jobId);
@@ -34,7 +40,7 @@ export function ImagesPage() {
   const newest = images?.releases[0];
   const defaultIsStale = Boolean(newest && images?.defaultImage && newest.image !== images.defaultImage);
 
-  const rows = (list: ImageTag[]) => list.map((t) => (
+  const rows = (list: ImageTag[], isRelease: boolean) => list.map((t) => (
     <Table.Tr key={t.tag}>
       <Table.Td>
         <Group gap={6}>
@@ -54,6 +60,15 @@ export function ImagesPage() {
       </Table.Td>
       <Table.Td>
         <Group gap={6} justify="flex-end" wrap="nowrap">
+          {/* Only on builds: a release is what you promote TO, not FROM. */}
+          {!isRelease && (
+            <Tooltip label="Give this build a release version" withArrow>
+              <Button size="xs" variant="light" color="teal" leftSection={<IconRocket size={14} />}
+                      onClick={() => { setPromote(t); setVersion(''); setNotes(''); }}>
+                Make a release
+              </Button>
+            </Tooltip>
+          )}
           <Button size="xs" variant="light" leftSection={<IconArrowUp size={14} />} onClick={() => { setPick(t); setConfirm(''); }}>
             Move a tenant here
           </Button>
@@ -89,24 +104,27 @@ export function ImagesPage() {
       <Card withBorder padding="md">
         <Text fw={600} mb={4}>How a build becomes a release</Text>
         <Text size="sm" c="dimmed">
-          A <b>release</b> is created by tagging the platform repository{' '}
-          <Code>git tag vYYYY.M.P &amp;&amp; git push --tags</Code>. CI builds that tag, asserts that{' '}
-          <Code>/health</Code> reports the same version, refuses to overwrite an existing one, and publishes it.
-          Release tags are immutable — a fix means a new patch, never a rebuild of the same number.
+          A <b>CI build</b> is <Code>2026.0.N</Code>, published on every push. The zero is deliberate:
+          no month is zero, so a build can never collide with a release.
         </Text>
         <Text size="sm" c="dimmed" mt={6}>
-          A <b>CI build</b> is <Code>2026.0.N</Code>. The zero is deliberate: no month is zero, so a build can never
-          collide with a release. They exist to be tested, not to be pinned to a customer.
+          A <b>release</b> is a build somebody promoted — right here, with the button on its row.
+          Promotion copies nothing: the release tag is a <i>second name</i> for the same manifest, so the
+          bytes that were tested are the bytes that ship, with no rebuild in between. The version is the
+          next patch of the current month, and it is proposed for you.
         </Text>
         <Text size="sm" c="dimmed" mt={6}>
-          A CI build cannot be <i>promoted</i> into a release, and the panel deliberately offers no button for it.
-          The version is compiled INTO the assembly, so re-tagging <Code>2026.0.33</Code> as <Code>2026.9.1</Code>{' '}
-          would produce an image whose <Code>/health</Code> still said <Code>2026.0.33</Code> — precisely the
-          mismatch CI exists to prevent. A release is rebuilt from its tag.
+          Two consequences, both worth knowing before you promote. The version is compiled INTO the
+          assembly, so an image promoted to <Code>2026.9.5</Code> still reports its build number from{' '}
+          <Code>/health</Code> — that is not a fault, it is the same image, and this screen is where the
+          two names are reconciled. And because both names point at one manifest, they cannot be
+          separated: deleting either removes it from under both, which is why Delete refuses whenever any
+          name on a manifest is a release, is the fleet default, or is what a tenant runs.
         </Text>
       </Card>
 
       {error && <Alert color="red" icon={<IconAlertTriangle size={16} />} withCloseButton onClose={() => setError(null)}>{error}</Alert>}
+      {released && <Alert color="teal" withCloseButton onClose={() => setReleased(null)}>{released}</Alert>}
       {images?.error && <Alert color="yellow">{images.error}</Alert>}
 
       {defaultIsStale && (
@@ -138,13 +156,13 @@ export function ImagesPage() {
             <Tabs.Panel value="releases">
               <Table striped highlightOnHover>
                 <Table.Thead><Table.Tr><Table.Th>Tag</Table.Th><Table.Th>In use by</Table.Th><Table.Th /></Table.Tr></Table.Thead>
-                <Table.Tbody>{rows(images?.releases ?? [])}</Table.Tbody>
+                <Table.Tbody>{rows(images?.releases ?? [], true)}</Table.Tbody>
               </Table>
             </Tabs.Panel>
             <Tabs.Panel value="builds">
               <Table striped highlightOnHover>
                 <Table.Thead><Table.Tr><Table.Th>Tag</Table.Th><Table.Th>In use by</Table.Th><Table.Th /></Table.Tr></Table.Thead>
-                <Table.Tbody>{rows(images?.builds ?? [])}</Table.Tbody>
+                <Table.Tbody>{rows(images?.builds ?? [], false)}</Table.Tbody>
               </Table>
             </Tabs.Panel>
           </Tabs>
@@ -233,6 +251,42 @@ export function ImagesPage() {
               }}
             >
               Delete it
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal opened={Boolean(promote)} onClose={() => setPromote(null)} title="Make a release">
+        <Stack gap="sm">
+          <Alert color="teal">
+            <Code>{promote?.tag}</Code> gets a release version. Nothing is rebuilt and nothing is copied —
+            the release tag becomes a second name for this exact manifest, so what ships is what was tested.
+          </Alert>
+          {/* Left blank on purpose. The server proposes the next patch of the
+              current month, and it derives that from the REGISTRY — a tag can
+              exist without a release row, and the collision would be with the
+              tag. Guessing it here would be a second, worse source of truth. */}
+          <TextInput
+            label="Version" placeholder="proposed automatically — leave empty"
+            description="YYYY.M.P. Empty means the next patch of this month."
+            value={version} onChange={(e) => setVersion(e.currentTarget.value)}
+          />
+          <TextInput
+            label="What changed" placeholder="Optional, but this is the only place it gets recorded"
+            value={notes} onChange={(e) => setNotes(e.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPromote(null)}>Cancel</Button>
+            <Button color="teal" leftSection={<IconRocket size={16} />}
+              onClick={async () => {
+                const p = promote!; setPromote(null);
+                try {
+                  const r = await api.promoteImage(p.tag, version.trim() || null, notes.trim() || null);
+                  setReleased(`${p.tag} is now released as ${r.version} — same digest, no rebuild.`);
+                  await refresh();
+                } catch (e) { setError((e as Error).message); }
+              }}
+            >
+              Release it
             </Button>
           </Group>
         </Stack>

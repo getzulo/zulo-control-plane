@@ -335,8 +335,44 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                     b.ToTable("Snapshots");
                 });
 
-            modelBuilder.Entity("ZuloOne.ControlPlane.Settings.Setting", b =>
+            modelBuilder.Entity("ZuloOne.ControlPlane.Registry.Release", b =>
                 {
+                    b.Property<string>("Version")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Digest")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime>("PromotedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PromotedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("SourceTag")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Version");
+
+                    b.ToTable("Releases");
+                });
+
+            modelBuilder.Entity("ZuloOne.ControlPlane.Settings.Setting", b =>                {
                     b.Property<string>("Key")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");

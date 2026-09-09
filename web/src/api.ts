@@ -404,6 +404,17 @@ export const api = {
   // ---------------------------------------------------------------- images ---
   images: () => request<Images>('/api/images'),
 
+  /**
+   * Turn a build into a release. Adds a NAME to the existing manifest — no
+   * rebuild, so the released bytes are the tested bytes. Pass version null to
+   * let the server take the next patch of the current month.
+   */
+  promoteImage: (tag: string, version: string | null, notes: string | null) =>
+    request<{ version: string; image: string; digest: string; promotedFrom: string }>(
+      `/api/images/${encodeURIComponent(tag)}/promote`, {
+        method: 'POST', body: JSON.stringify({ version, notes }),
+      }),
+
   settings: () => request<{ groups: SettingGroup[] }>('/api/settings'),
 
   /** All or nothing: the server validates every key before writing any. */
