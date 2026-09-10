@@ -473,7 +473,10 @@ public class ImagesController : ControllerBase
     }
 
     /// <summary><c>host:port/repo:tag</c> → registry and repository.</summary>
-    private static (string? Registry, string Repository) SplitImage(string image)
+    /// <remarks>internal so the models catalogue splits an image the same way — one
+    /// definition, because two would drift the first time a registry host changed
+    /// shape.</remarks>
+    internal static (string? Registry, string Repository) SplitImage(string image)
     {
         var withoutTag = image.Contains(':') && image.LastIndexOf(':') > image.LastIndexOf('/')
             ? image[..image.LastIndexOf(':')]

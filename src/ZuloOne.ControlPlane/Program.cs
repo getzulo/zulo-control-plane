@@ -1,4 +1,4 @@
-using Docker.DotNet;
+﻿using Docker.DotNet;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -92,6 +92,7 @@ builder.Services.AddScoped<TenantContainerService>();
 builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantStatsService>();
 builder.Services.AddScoped<TenantModelsService>();
+builder.Services.AddScoped<RegistryModelCatalog>();
 builder.Services.AddScoped<TenantAdminService>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();

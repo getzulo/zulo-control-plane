@@ -1,4 +1,4 @@
-/** Talks to the control-plane API. The base URL is same-origin by default so the
+﻿/** Talks to the control-plane API. The base URL is same-origin by default so the
  *  dashboard can be served by the control plane itself; VITE_API_BASE overrides it
  *  while developing against a separately-run backend. */
 const BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -193,6 +193,44 @@ export interface TenantModels {
   }[];
   /** In the image and not in the database — excluded by the allow-list, or a failed install. */
   notInstalled: { name: string; version: string }[];
+}
+
+export interface ModelCatalogue {
+  /** Set when the registry could not be reached; the rest is still shaped. */
+  error?: string | null;
+  registry?: string | null;
+  /** Every model any image declares, with the versions available and where each lives. */
+  models: {
+    model: string;
+    versions: { version: string; images: string[] }[];
+  }[];
+  /** One row per image that declares a model set. Images without one are the platform. */
+  images: {
+    image: string;
+    repository: string;
+    tag: string;
+    platform?: string | null;
+    workspace?: string | null;
+    models: { name: string; version: string }[];
+  }[];
+  tenants: {
+    id: string;
+    slug: string;
+    imageTag: string;
+    status: string;
+    error?: string | null;
+    /** What the tenant's image declares. Null means its labels could not be read. */
+    carries?: { name: string; version: string }[] | null;
+    installed: {
+      name: string;
+      version?: string | null;
+      isSystem: boolean;
+      isEnabled: boolean;
+      compilationStatus?: string | null;
+      compilationError?: string | null;
+      offers?: string | null;
+    }[];
+  }[];
 }
 
 export interface SnapshotList {
@@ -476,6 +514,9 @@ export const api = {
 
   /** Apply the retention policy now rather than at the next scheduled sweep. */
   prune: () => request<{ jobId: string }>('/api/snapshots/prune', { method: 'POST' }),
+
+  /** The registry's model catalogue plus what each tenant actually runs. */
+  modelCatalogue: () => request<ModelCatalogue>('/api/models'),
 
   /** Snapshots first — that snapshot is the only way back past a migration. */
   upgrade: (tenantId: string, imageTag: string) =>

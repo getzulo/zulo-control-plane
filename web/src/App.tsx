@@ -1,4 +1,4 @@
-import { NavLink as RouterNavLink, Route, Routes, useLocation } from 'react-router-dom';
+﻿import { NavLink as RouterNavLink, Route, Routes, useLocation } from 'react-router-dom';
 import {
   ActionIcon, AppShell, Badge, Burger, Group, NavLink, ScrollArea, Text, ThemeIcon, Tooltip,
   UnstyledButton, useMantineColorScheme,
@@ -6,7 +6,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconMoon,
-  IconPackages, IconServer2, IconSettings, IconSun,
+  IconPackage, IconPackages, IconServer2, IconSettings, IconSun,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp } from './shared';
@@ -16,6 +16,7 @@ import { TenantPage } from './Tenant';
 import { InfrastructurePage } from './Infrastructure';
 import { SnapshotsPage } from './Snapshots';
 import { ImagesPage } from './Images';
+import { ModelsPage } from './Models';
 import { SettingsPage } from './Settings';
 
 const NAV = [
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/infrastructure', label: 'Infrastructure', icon: IconServer2, end: false },
   { to: '/backups', label: 'Backups', icon: IconDatabaseExport, end: false },
   { to: '/images', label: 'Images', icon: IconPackages, end: false },
+  { to: '/models', label: 'Models', icon: IconPackage, end: false },
   { to: '/activity', label: 'Activity', icon: IconActivity, end: false },
   { to: '/settings', label: 'Settings', icon: IconSettings, end: false },
 ];
@@ -118,6 +120,7 @@ export default function App() {  const auth = useAuth();
           <Route path="/infrastructure" element={<InfrastructurePage />} />
           <Route path="/backups" element={<SnapshotsPage />} />
           <Route path="/images" element={<ImagesPage />} />
+          <Route path="/models" element={<ModelsPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           {/* Anything else is a stale bookmark; the overview is always safe. */}
