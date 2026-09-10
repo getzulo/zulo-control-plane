@@ -187,10 +187,19 @@ public sealed class RegistryModelCatalog
 
             if (manifest.RootElement.TryGetProperty("manifests", out var list) && list.ValueKind == JsonValueKind.Array)
             {
-                var first = list.EnumerateArray().FirstOrDefault();
-                var inner = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("digest", out var d)
-                    ? d.GetString()
-                    : null;
+                // An index, and NOT necessarily one entry. buildkit publishes the
+                // image alongside an attestation manifest whose platform is
+                // "unknown/unknown" and which has no labels at all — measured here:
+                // every distribution image is an OCI index of exactly those two.
+                // Taking the first entry works only for as long as the real one
+                // happens to be first.
+                var inner = list.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.Object)
+                    .Where(e => !e.TryGetProperty("platform", out var p)
+                             || !p.TryGetProperty("os", out var os)
+                             || !string.Equals(os.GetString(), "unknown", StringComparison.Ordinal))
+                    .Select(e => e.TryGetProperty("digest", out var d) ? d.GetString() : null)
+                    .FirstOrDefault(d => d is not null);
                 if (inner is null) return empty;
                 manifest.Dispose();
                 manifest = await GetJsonAsync(client, registry, repository, inner, ct);
