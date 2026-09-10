@@ -200,6 +200,46 @@ public sealed class TenantContainerService
             cancellationToken: ct);
     }
 
+    /// <summary>
+    /// What an image says it carries, from its labels — without running it.
+    /// </summary>
+    /// <remarks>
+    /// A distribution image is built <c>FROM</c> the platform with the business
+    /// layer copied in, and CI stamps <c>one.zulo.models</c> and
+    /// <c>one.zulo.platform</c> on it. Reading them here is how the panel can say
+    /// what an image would install before anyone moves a tenant onto it.
+    ///
+    /// <para>
+    /// Asked of the DAEMON rather than the registry. The registry answer is three
+    /// round trips — index, then platform manifest, then the config blob — while
+    /// the daemon already holds every image the fleet runs and returns the labels
+    /// directly. The cost is that an image nobody has pulled yet reports nothing,
+    /// which is the honest answer to "what does this carry" for an image that is
+    /// not here.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, string>> LabelsAsync(string image, CancellationToken ct = default)
+    {
+        try
+        {
+            var inspect = await _docker.Images.InspectImageAsync(image, ct);
+            // Docker.DotNet hands back IDictionary; copied rather than cast so the
+            // caller cannot mutate what the daemon returned.
+            return inspect.Config?.Labels is { } labels
+                ? new Dictionary<string, string>(labels)
+                : new Dictionary<string, string>();
+        }
+        catch (DockerImageNotFoundException)
+        {
+            return new Dictionary<string, string>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read the labels of {Image}.", image);
+            return new Dictionary<string, string>();
+        }
+    }
+
     public async Task StopAsync(string containerId, CancellationToken ct = default)
         => await _docker.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 30 }, ct);
 

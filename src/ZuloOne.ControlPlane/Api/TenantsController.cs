@@ -180,6 +180,73 @@ public class TenantsController : ControllerBase
     }
 
     /// <summary>
+    /// The business layer this tenant has, beside the one its image carries.
+    /// </summary>
+    /// <remarks>
+    /// Two different facts that the fleet list conflates. The registry records
+    /// which image a tenant is PINNED to; it has never recorded what that image
+    /// installed. A tenant on the newest image whose models failed to compile, and
+    /// one provisioned before packages existed and carrying nothing at all, look
+    /// identical from outside — this is where they stop looking identical.
+    /// </remarks>
+    [HttpGet("{id:guid}/models")]
+    public async Task<IActionResult> Models(
+        Guid id,
+        [FromServices] TenantModelsService models,
+        [FromServices] TenantContainerService containers,
+        CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+
+        var (installed, error) = await models.ReadAsync(tenant, ct);
+        var labels = await containers.LabelsAsync(tenant.ImageTag, ct);
+
+        // "Accounting=1.0.0,Common=1.0.0" — what the image would install, stamped
+        // by the workspace CI. Absent for a platform-only image, which is itself
+        // the answer to "why has this tenant no business layer".
+        var offered = (labels.GetValueOrDefault("one.zulo.models") ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(pair => pair.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.OrdinalIgnoreCase);
+
+        var installedByName = installed.ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            error,
+            imageTag = tenant.ImageTag,
+            // Which platform build the distribution was cut from, when the image
+            // says so. The tenant's own /health reports this same number, because
+            // promotion renames an image rather than rebuilding it.
+            platformBuild = labels.GetValueOrDefault("one.zulo.platform"),
+            workspaceCommit = labels.GetValueOrDefault("one.zulo.workspace"),
+            carriesPackages = offered.Count > 0,
+            models = installed.Select(m => new
+            {
+                m.Name,
+                m.Version,
+                m.Publisher,
+                m.IsSystem,
+                m.IsEnabled,
+                m.CompilationStatus,
+                m.CompilationError,
+                offers = offered.GetValueOrDefault(m.Name),
+                // Behind what the image carries. Not an error — a tenant may sit a
+                // version back deliberately — but it is the thing an operator came
+                // to this page to find out.
+                behind = offered.TryGetValue(m.Name, out var v)
+                         && !string.Equals(v, m.Version, StringComparison.OrdinalIgnoreCase),
+            }),
+            // In the image and NOT in the database: either never installed because
+            // the tenant's allow-list excludes it, or the install failed.
+            notInstalled = offered.Where(kv => !installedByName.ContainsKey(kv.Key))
+                .Select(kv => new { name = kv.Key, version = kv.Value }),
+        });
+    }
+
+    /// <summary>
     /// What this tenant is using right now — container and database.
     ///
     /// Read on demand rather than scraped. A fleet this size does not need a

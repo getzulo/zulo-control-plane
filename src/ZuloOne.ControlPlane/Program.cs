@@ -91,6 +91,7 @@ builder.Services.AddScoped<TenantDatabaseProvisioner>();
 builder.Services.AddScoped<TenantContainerService>();
 builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantStatsService>();
+builder.Services.AddScoped<TenantModelsService>();
 builder.Services.AddScoped<TenantAdminService>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();

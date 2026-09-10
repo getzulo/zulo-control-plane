@@ -1,12 +1,13 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Table, Tabs, Text, TextInput, Title,
+  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Table, Tabs,
+  Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import {
   IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
-import { api, type ImageTag, type Job, type Snapshot, type Tenant, type TenantStats } from './api';
+import { api, type ImageTag, type Job, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
 
 /**
@@ -35,6 +36,7 @@ export function TenantPage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [logs, setLogs] = useState('');
   const [stats, setStats] = useState<TenantStats | null>(null);
+  const [models, setModels] = useState<TenantModels | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -73,7 +75,14 @@ export function TenantPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [t, j, s] = await Promise.all([api.tenant(id), api.jobs({ tenantId: id, limit: 20 }), api.snapshots(id)]);
+      // allSettled: reading the tenant's own database is the one call here
+      // that depends on the tenant being reachable, and it must not cost the
+      // page when it is not.
+      const [t, j, s, m] = await Promise.all([
+        api.tenant(id), api.jobs({ tenantId: id, limit: 20 }), api.snapshots(id),
+        api.models(id).catch(() => null),
+      ]);
+      setModels(m);
       setTenant(t); setJobs(j); setSnapshots(s.snapshots); setError(null);
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
@@ -266,6 +275,98 @@ export function TenantPage() {
                   try { const r = await api.adminPassword(id); setRevealed(r); void refresh(); }
                   catch (e) { setError((e as Error).message); }
                 }}>Show it once</Button>
+              </Alert>
+            )}
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col span={12}>
+          <Card withBorder padding="md">
+            <Group justify="space-between" mb="xs">
+              <Text fw={600}>Business layer</Text>
+              {models && (
+                <Group gap={6}>
+                  {models.platformBuild && (
+                    <Tooltip label="The platform build this image was cut from" withArrow>
+                      <Badge variant="light" color="gray">platform {models.platformBuild}</Badge>
+                    </Tooltip>
+                  )}
+                  {!models.carriesPackages && (
+                    <Tooltip label="A platform-only image ships no models — that is why there is nothing to install." withArrow>
+                      <Badge color="orange">image carries no packages</Badge>
+                    </Tooltip>
+                  )}
+                </Group>
+              )}
+            </Group>
+
+            {!models ? <Text size="sm" c="dimmed">Reading…</Text>
+             : models.error ? <Alert color="yellow">{models.error}</Alert>
+             : models.models.length === 0 ? (
+              // The state every tenant was in before packages existed, and the one
+              // thing the fleet list could never show.
+              <Text size="sm" c="dimmed">
+                Nothing installed — not even Core. Move this tenant onto a distribution image
+                (<Code>zuloone:…</Code> rather than <Code>zuloone-core:…</Code>) and it installs its models on
+                the next boot.
+              </Text>
+             ) : (
+              <Table fz="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Model</Table.Th><Table.Th>Installed</Table.Th>
+                    <Table.Th>Image offers</Table.Th><Table.Th>Compiles</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {models.models.map((m) => (
+                    <Table.Tr key={m.name}>
+                      <Table.Td>
+                        <Group gap={6}>
+                          <Text size="sm" fw={m.isSystem ? 600 : 400}>{m.name}</Text>
+                          {m.isSystem && (
+                            <Tooltip label="The platform's own model. Its version IS the application version." withArrow>
+                              <Badge size="xs" color="gray">system</Badge>
+                            </Tooltip>
+                          )}
+                          {!m.isEnabled && (
+                            <Tooltip label="Disabled models are invisible at run time — no menus, no commands, no scripts." withArrow>
+                              <Badge size="xs" color="red">disabled</Badge>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td><Code fz={11}>{m.version ?? '—'}</Code></Table.Td>
+                      <Table.Td>
+                        {m.offers
+                          ? <Group gap={4}>
+                              <Code fz={11}>{m.offers}</Code>
+                              {m.behind && <Badge size="xs" color="orange">newer</Badge>}
+                            </Group>
+                          : <Text size="xs" c="dimmed">—</Text>}
+                      </Table.Td>
+                      <Table.Td>
+                        {m.compilationStatus
+                          ? <Tooltip label={m.compilationError ?? 'No error recorded'} multiline w={360} withArrow disabled={!m.compilationError}>
+                              <Badge color={m.compilationStatus === 'Ok' ? 'green' : 'red'}>{m.compilationStatus}</Badge>
+                            </Tooltip>
+                          : <Text size="xs" c="dimmed">—</Text>}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+             )}
+
+            {models && models.notInstalled.length > 0 && (
+              // Carried by the image and absent from the database: either the
+              // tenant's allow-list excludes it, or the install failed. Both are
+              // worth seeing; neither is visible anywhere else.
+              <Alert color="gray" variant="light" mt="sm">
+                <Text size="xs">
+                  In the image but not installed: {models.notInstalled.map((n) => `${n.name} ${n.version}`).join(', ')}.
+                  Either this tenant's model list excludes them, or the install did not run.
+                </Text>
               </Alert>
             )}
           </Card>

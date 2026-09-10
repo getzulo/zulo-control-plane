@@ -169,6 +169,32 @@ export interface TenantStats {
   error?: string | null;
 }
 
+/** The business layer a tenant HAS, beside what its image carries. */
+export interface TenantModels {
+  /** Set when the tenant's database could not be read; the rest is still returned. */
+  error?: string | null;
+  imageTag: string;
+  /** Which platform build the distribution was cut from, from the image labels. */
+  platformBuild?: string | null;
+  workspaceCommit?: string | null;
+  /** False for a platform-only image — which is itself why a tenant has no models. */
+  carriesPackages: boolean;
+  models: {
+    name: string;
+    version?: string | null;
+    publisher?: string | null;
+    isSystem: boolean;
+    isEnabled: boolean;
+    compilationStatus?: string | null;
+    compilationError?: string | null;
+    /** What the image offers for this model, when it offers one. */
+    offers?: string | null;
+    behind: boolean;
+  }[];
+  /** In the image and not in the database — excluded by the allow-list, or a failed install. */
+  notInstalled: { name: string; version: string }[];
+}
+
 export interface SnapshotList {
   snapshots: Snapshot[];
   /** Every row, not just the ones returned — the list is capped at 200. */
@@ -332,6 +358,8 @@ export const api = {
 
   /** Container CPU/memory and database size/connections. Takes ~1s: a real CPU
    *  percentage needs two samples from the Docker stats stream. */
+  models: (id: string) => request<TenantModels>(`/api/tenants/${id}/models`),
+
   stats: (id: string) => request<TenantStats>(`/api/tenants/${id}/stats`),
 
   /** What the container REPORTS, as opposed to the tag pinned in the registry. */
