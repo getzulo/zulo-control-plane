@@ -80,7 +80,10 @@ public class ImagesController : ControllerBase
         // A release is CalVer with a non-zero month; `2026.0.<run>` is the sentinel
         // for "not a release", and sha-<commit> is a build artefact.
         var releases = tags.Where(IsRelease).OrderByDescending(t => t, CalVer).ToList();
-        var builds = tags.Where(t => !IsRelease(t)).OrderByDescending(t => t, StringComparer.Ordinal).ToList();
+        var builds = tags
+            .Where(t => !IsRelease(t) && !IsRedundantCommitTag(t, digests))
+            .OrderByDescending(t => t, StringComparer.Ordinal)
+            .ToList();
 
         return Ok(new
         {
@@ -491,6 +494,42 @@ public class ImagesController : ControllerBase
             && int.TryParse(parts[1], out var month) && month is >= 1 and <= 12
             && int.TryParse(parts[2], out _);
     }
+
+    /// <summary>
+    /// A <c>sha-&lt;commit&gt;</c> tag whose manifest already carries a readable name.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// CI puts two names on every build — the commit and the build number — and both
+    /// are tags on ONE manifest. Listing tags verbatim therefore showed each image
+    /// twice, once as <c>2026.0.45</c> and once as <c>sha-67eee43</c>, each row
+    /// naming the other in its "also tagged" column. Half the screen was the same
+    /// images read backwards.
+    /// </para>
+    ///
+    /// <para>
+    /// Hidden only when something else covers it. A commit tag whose digest could
+    /// not be read, or whose manifest has no other name, stays on the list: an image
+    /// nobody can see is an image nobody can delete, and this screen is the only
+    /// place a manifest can be removed at all.
+    /// </para>
+    ///
+    /// <para>
+    /// The commit does not disappear — it is still on the build's own row under
+    /// <c>alsoTagged</c>, which is where a reader looks for it anyway.
+    /// </para>
+    /// </remarks>
+    private static bool IsRedundantCommitTag(string tag, Dictionary<string, string?> digests)
+    {
+        if (!tag.StartsWith(CommitTagPrefix, StringComparison.Ordinal)) return false;
+        var digest = digests.GetValueOrDefault(tag);
+        if (digest is null) return false;
+        return digests.Any(kv => kv.Value == digest
+                              && !kv.Key.StartsWith(CommitTagPrefix, StringComparison.Ordinal));
+    }
+
+    /// <summary>What CI names an image after the commit that produced it.</summary>
+    private const string CommitTagPrefix = "sha-";
 
     /// <summary>
     /// CalVer, NOT lexicographic. Ordinal string comparison puts 2026.9.10 below
