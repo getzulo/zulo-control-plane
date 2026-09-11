@@ -173,9 +173,10 @@ public static class SettingsCatalog
             SettingKind.TextList, "", RuntimeEditable: false),
 
         new("Fleet:Packages", Fleet,
-            "Models installed on a new tenant",
-            "Which business-layer models a freshly provisioned tenant installs from the image it "
-            + "carries. Empty installs nothing; '*' installs everything the image has.",
+            "Models installed by default",
+            "The list a tenant follows unless it has been pinned to its own on the Models screen. "
+            + "Changing it moves every unpinned tenant at their next recreate, and nothing before "
+            + "that. Empty installs nothing; '*' installs everything the image has.",
             SettingKind.TextList, "Common,Organization"),
 
         // --------------------------------------------------------- Monitoring

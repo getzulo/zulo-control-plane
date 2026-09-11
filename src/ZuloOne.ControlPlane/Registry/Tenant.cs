@@ -179,6 +179,37 @@ public class Tenant
     /// <summary>Why provisioning or a lifecycle action failed; null when fine.</summary>
     public string? LastError { get; set; }
 
+    /// <summary>
+    /// Which models this tenant installs, as JSON: <c>{"Sales":"1.2.0","Common":""}</c>.
+    /// An empty version means "whatever the image carries".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NULL means fall through to <c>Fleet:Packages</c></b>, and that is the whole
+    /// compatibility story: every tenant that existed before this column keeps the
+    /// fleet-wide list it has always had, and only a tenant somebody has deliberately
+    /// pinned stops following it.
+    /// </para>
+    ///
+    /// <para>
+    /// Read at container creation, not at runtime — <see cref="Provisioning.TenantContainerService"/>
+    /// turns it into <c>ZuloOne__Packages__Install</c> and the tenant acts on it at
+    /// boot. So changing this column does nothing until the container is recreated,
+    /// which means a model rollout costs the same snapshot, health gate and pin-back
+    /// as an image upgrade. "Just change the models" is not a cheaper operation; it
+    /// is the same one.
+    /// </para>
+    ///
+    /// <para>
+    /// Sits on the tenant rather than in <c>Settings</c> for the same reason
+    /// <see cref="ImageTag"/> does: it is per-tenant state, and the settings store is a
+    /// declared catalogue rendered onto a screen, where per-tenant rows would appear
+    /// as unrecognised keys and bloat a singleton cache.
+    /// </para>
+    /// </remarks>
+    [MaxLength(2000)]
+    public string? Models { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

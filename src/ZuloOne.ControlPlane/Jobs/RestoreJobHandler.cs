@@ -81,6 +81,15 @@ public sealed class RestoreJobHandler : IJobHandler
         // corruption. Using the recorded tag keeps the copy faithful.
         var imageTag = string.IsNullOrWhiteSpace(snapshot.ImageTag) ? _fleet.DefaultImage : snapshot.ImageTag!;
 
+        // …and the same model pin, for the same reason. The copy exists to be compared
+        // against the original before anything irreversible; a copy that installs a
+        // different business layer is not the thing being compared. Null inherits
+        // null, so a tenant following the fleet default keeps following it.
+        var sourceModels = await _db.Tenants.AsNoTracking()
+            .Where(t => t.Slug == snapshot.TenantSlug)
+            .Select(t => t.Models)
+            .FirstOrDefaultAsync(ct);
+
         var slug = await UniqueSlugAsync(ct);
         await context.StepAsync($"Creating the scratch tenant {slug}", 5, ct);
         await context.LogAsync(
@@ -92,6 +101,7 @@ public sealed class RestoreJobHandler : IJobHandler
             DisplayName = $"Restore of {snapshot.TenantSlug} ({snapshot.CreatedAt:yyyy-MM-dd HH:mm} UTC)",
             Status = TenantStatus.Provisioning,
             ImageTag = imageTag,
+            Models = sourceModels,
             // A KEY OF ITS OWN, never the original's. A token minted in the copy must
             // not be valid against the live tenant: the copy exists to be poked at,
             // often by more people than usually touch production, and a shared key

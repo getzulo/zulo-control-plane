@@ -26,6 +26,51 @@ public sealed class TenantContainerService
 
     public string HostFor(string slug) => $"{slug}.{_fleet.RootDomain}";
 
+    /// <summary>
+    /// The model list this tenant boots with — its own pin, or the fleet's default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Tenant.Models"/> null means "follow <c>Fleet:Packages</c>". That is
+    /// the whole compatibility story for tenants that predate the column, and it is
+    /// why this returns the fleet value rather than an empty string: empty means
+    /// "install nothing", and a tenant silently losing its business layer on the next
+    /// recreate is the failure this guards against.
+    /// </para>
+    ///
+    /// <para>
+    /// Names only — <c>"Common,Organization"</c> or <c>"*"</c>. The tenant-side
+    /// installer matches on the model NAME, so a <c>Name=Version</c> entry would match
+    /// nothing and the model would be dropped without a word. Versions become
+    /// selectable when the image carries more than one of each; until then storing a
+    /// version nobody honours would be a promise the system cannot keep.
+    /// </para>
+    /// </remarks>
+    internal string ModelsFor(Tenant tenant)
+    {
+        if (string.IsNullOrWhiteSpace(tenant.Models)) return _fleet.Packages;
+        try
+        {
+            var names = System.Text.Json.JsonSerializer.Deserialize<List<string>>(tenant.Models);
+            if (names is null) return _fleet.Packages;
+            var cleaned = names
+                .Select(n => n?.Trim() ?? string.Empty)
+                .Where(n => n.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            // An explicitly EMPTY pin is a real choice — "this tenant gets nothing" —
+            // and must not silently fall back to the fleet list.
+            return string.Join(",", cleaned);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            // Unparseable is not "none": that would strip a live tenant's layer on the
+            // next recreate. Fall back to the fleet default and say so.
+            _logger.LogWarning(ex, "Tenant {Slug} has an unreadable Models pin; using the fleet default.", tenant.Slug);
+            return _fleet.Packages;
+        }
+    }
+
     /// <summary>Creates and starts the tenant's container; returns its id.</summary>
     public async Task<string> RunAsync(Tenant tenant, string connectionString, CancellationToken ct = default)
     {
@@ -74,12 +119,12 @@ public sealed class TenantContainerService
             "ASPNETCORE_ENVIRONMENT=Production",
             $"ZuloOne__BehindReverseProxy={_fleet.BehindReverseProxy.ToString().ToLowerInvariant()}",
             $"ZuloOne__PublicUrl=https://{host}",
-            // Which business-layer models this tenant installs from the bundles its
-            // image carries. Read on every boot by PackageInstaller, so an upgrade
-            // to an image with newer models applies them without anything else
-            // happening — and a tenant that bought accounting does not silently
-            // acquire payroll because it shipped in the same file.
-            $"ZuloOne__Packages__Install={_fleet.Packages}",
+            // Which business-layer models this tenant installs from what its image
+            // carries. Read on every boot by the installer, so moving a tenant to an
+            // image with newer models applies them without anything else happening —
+            // and a tenant that bought accounting does not silently acquire payroll
+            // because it shipped in the same file.
+            $"ZuloOne__Packages__Install={ModelsFor(tenant)}",
         };
 
         // Remove a stale container of the same name first — provisioning must be
