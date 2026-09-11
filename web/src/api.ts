@@ -79,6 +79,8 @@ export interface Tenant {
 export type JobState = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
 export type JobKind =
   | 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover'
+  /** Several tenants moved one at a time, stopping on the first that does not come up. */
+  | 'Rollout'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
   | 'Prune'
   /** Dump of the panel's OWN database — the record of which container belongs to whom. */
@@ -517,6 +519,24 @@ export const api = {
 
   /** The registry's model catalogue plus what each tenant actually runs. */
   modelCatalogue: () => request<ModelCatalogue>('/api/models'),
+
+  /**
+   * Moves several tenants, one at a time. Validated server-side before anything is
+   * queued, so a bad selection is a 400 rather than a wave that dies on tenant one.
+   */
+  startRollout: (body: {
+    imageTag?: string | null;
+    setModels: boolean;
+    models?: string[] | null;
+    tenantIds: string[];
+    stopOnFailure?: boolean;
+    stopOnCompileErrors?: boolean;
+  }) => request<{ jobId: string }>('/api/rollouts', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Asks a running job to stop. A wave checks between tenants, never inside one. */
+  cancelJob: (id: string) =>
+    request<{ id: string; state: string; cancelRequested: boolean }>(
+      `/api/jobs/${id}/cancel`, { method: 'POST' }),
 
   /** Snapshots first — that snapshot is the only way back past a migration. */
   upgrade: (tenantId: string, imageTag: string) =>

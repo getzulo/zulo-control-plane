@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Registry;
@@ -41,6 +41,34 @@ public class JobsController : ControllerBase
             .ToListAsync(ct);
 
         return Ok(jobs);
+    }
+
+    /// <summary>
+    /// Asks a running job to stop. Cooperative — the job decides where stopping is safe.
+    /// </summary>
+    /// <remarks>
+    /// This controller had no write endpoint at all, and the only way to halt a job was
+    /// restarting the control plane — which recovery then records as Failed, making a
+    /// deliberate stop indistinguishable from a crash. A rollout of twenty tenants
+    /// holds the strictly-serial queue for hours, so a stop button is not optional.
+    ///
+    /// <para>
+    /// Setting the flag on a job that has already finished is accepted and does
+    /// nothing: the caller asked for it to stop, and it has.
+    /// </para>
+    /// </remarks>
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
+    {
+        var job = await _db.Jobs.FirstOrDefaultAsync(j => j.Id == id, ct);
+        if (job is null) return NotFound(new { error = "Job not found", id });
+
+        if (job.IsTerminal)
+            return Ok(new { job.Id, state = job.State.ToString(), cancelRequested = job.CancelRequested });
+
+        job.CancelRequested = true;
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { job.Id, state = job.State.ToString(), cancelRequested = true });
     }
 
     /// <summary>One job WITH its log — the detail view behind a progress row.</summary>

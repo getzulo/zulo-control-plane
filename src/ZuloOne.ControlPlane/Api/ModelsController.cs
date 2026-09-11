@@ -1,5 +1,7 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -32,17 +34,20 @@ public class ModelsController : ControllerBase
     private readonly RegistryModelCatalog _catalogue;
     private readonly TenantModelsService _tenantModels;
     private readonly FleetConfig _fleet;
+    private readonly IJobQueue _queue;
 
     public ModelsController(
         ControlPlaneDbContext db,
         RegistryModelCatalog catalogue,
         TenantModelsService tenantModels,
-        FleetConfig fleet)
+        FleetConfig fleet,
+        IJobQueue queue)
     {
         _db = db;
         _catalogue = catalogue;
         _tenantModels = tenantModels;
         _fleet = fleet;
+        _queue = queue;
     }
 
     [HttpGet]
@@ -130,5 +135,87 @@ public class ModelsController : ControllerBase
             }),
             tenants,
         });
+    }
+
+    /// <summary>What a rollout should do, from the screen.</summary>
+    public sealed record RolloutRequest(
+        string? ImageTag,
+        bool SetModels,
+        string[]? Models,
+        Guid[] TenantIds,
+        bool StopOnFailure = true,
+        bool StopOnCompileErrors = true);
+
+    /// <summary>
+    /// Starts a wave: several tenants moved one at a time, stopping on the first that
+    /// does not come up.
+    /// </summary>
+    /// <remarks>
+    /// Validated HERE, before anything is queued, so a mistake costs a 400 rather than
+    /// a wave that dies on its first tenant with a snapshot already taken. Checking it
+    /// inside the job would be too late: by then the operator has walked away.
+    /// </remarks>
+    [HttpPost("/api/rollouts")]
+    public async Task<IActionResult> Rollout([FromBody] RolloutRequest request, CancellationToken ct)
+    {
+        if (request.TenantIds is null || request.TenantIds.Length == 0)
+            return BadRequest(new { error = "Name at least one tenant to move." });
+        if (string.IsNullOrWhiteSpace(request.ImageTag) && !request.SetModels)
+            return BadRequest(new { error = "A rollout must change the image, the model set, or both." });
+
+        var tenants = await _db.Tenants.AsNoTracking()
+            .Where(t => request.TenantIds.Contains(t.Id))
+            .ToListAsync(ct);
+        var missing = request.TenantIds.Where(id => tenants.All(t => t.Id != id)).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { error = $"{missing.Count} of the named tenants are not in the registry." });
+
+        // A model the target image does not carry would install nothing and say
+        // nothing — the tenant would come up healthy and short of what was asked for.
+        if (request.SetModels && request.Models is { Length: > 0 } && !request.Models.Contains("*"))
+        {
+            var (registry, _) = ImagesController.SplitImage(_fleet.DefaultImage);
+            if (registry is not null)
+            {
+                var images = await _catalogue.ReadAsync(registry, ct);
+                // Against the target image when one is named; otherwise against what
+                // each tenant already runs, since that is what will install them.
+                var targets = string.IsNullOrWhiteSpace(request.ImageTag)
+                    ? tenants.Select(t => t.ImageTag).Distinct(StringComparer.Ordinal).ToList()
+                    : [request.ImageTag!];
+
+                foreach (var target in targets)
+                {
+                    var image = images.FirstOrDefault(i => string.Equals(i.Image, target, StringComparison.Ordinal));
+                    if (image is null) continue;   // unreadable labels are not a veto
+                    var absent = request.Models
+                        .Where(m => !image.Models.Any(o => string.Equals(o.Name, m, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+                    if (absent.Count > 0)
+                    {
+                        return BadRequest(new
+                        {
+                            error = $"{target} does not carry {string.Join(", ", absent)}. "
+                                  + "Installing a model an image lacks does nothing and reports nothing.",
+                        });
+                    }
+                }
+            }
+        }
+
+        // Ordered as the caller listed them: a wave is a sequence, and the operator
+        // choosing which tenant goes first is the point.
+        var ordered = request.TenantIds.ToArray();
+        var models = request.SetModels && request.Models is not null
+            ? System.Text.Json.JsonSerializer.Serialize(request.Models)
+            : null;
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Rollout, null, null,
+            new RolloutPayload(request.ImageTag, request.SetModels, models, ordered,
+                request.StopOnFailure, request.StopOnCompileErrors),
+            OperatorIdentity.Of(User), ct);
+
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
     }
 }

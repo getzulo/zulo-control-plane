@@ -1,4 +1,4 @@
-namespace ZuloOne.ControlPlane.Jobs;
+﻿namespace ZuloOne.ControlPlane.Jobs;
 
 /// <summary>What a job is doing. The kind decides which handler picks it up.</summary>
 public enum JobKind
@@ -52,6 +52,17 @@ public enum JobKind
     /// dump exists before retention is applied and the sweep counts it.
     /// </remarks>
     RegistrySnapshot,
+
+    /// <summary>
+    /// Moves SEVERAL tenants, one at a time, stopping on the first that fails.
+    /// </summary>
+    /// <remarks>
+    /// One job rather than N, because the wave's whole value is the decision between
+    /// tenants: a bad image reaching the second tenant means it must not reach the
+    /// twentieth. N independent jobs would each succeed or fail alone and nothing
+    /// would be watching the sequence.
+    /// </remarks>
+    Rollout,
 }
 
 /// <summary>
@@ -131,6 +142,18 @@ public class Job
     public DateTime? StartedAt { get; set; }
 
     public DateTime? FinishedAt { get; set; }
+
+    /// <summary>
+    /// An operator has asked this job to stop. Cooperative: the job reads it and
+    /// decides where stopping is safe.
+    /// </summary>
+    /// <remarks>
+    /// A flag rather than a cancellation token because the worker's token is tied to
+    /// process shutdown, and this is not that. A wave checks it BETWEEN tenants, so
+    /// cancelling never tears a tenant down mid-recreate — the one in flight finishes
+    /// or rolls back on its own terms, and the rest are simply not started.
+    /// </remarks>
+    public bool CancelRequested { get; set; }
 
     public bool IsTerminal => State is JobState.Succeeded or JobState.Failed or JobState.Cancelled;
 }
