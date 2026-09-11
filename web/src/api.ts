@@ -81,6 +81,8 @@ export type JobKind =
   | 'Provision' | 'Adopt' | 'Snapshot' | 'Restore' | 'Swap' | 'Upgrade' | 'Backup' | 'Switchover'
   /** Several tenants moved one at a time, stopping on the first that does not come up. */
   | 'Rollout'
+  /** Models put into a tenant that keeps running; no container is recreated. */
+  | 'InstallModels'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
   | 'Prune'
   /** Dump of the panel's OWN database — the record of which container belongs to whom. */
@@ -532,6 +534,15 @@ export const api = {
     stopOnFailure?: boolean;
     stopOnCompileErrors?: boolean;
   }) => request<{ jobId: string }>('/api/rollouts', { method: 'POST', body: JSON.stringify(body) }),
+
+  /**
+   * Installs models into a RUNNING tenant — no container recreate. The snapshot taken
+   * first is the only undo, because there is no previous image to pin back.
+   */
+  installModels: (tenantId: string, body: { imageTag?: string | null; models: string[] }) =>
+    request<{ jobId: string }>(`/api/tenants/${tenantId}/install-models`, {
+      method: 'POST', body: JSON.stringify(body),
+    }),
 
   /** Asks a running job to stop. A wave checks between tenants, never inside one. */
   cancelJob: (id: string) =>

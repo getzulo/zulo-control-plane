@@ -63,6 +63,16 @@ public enum JobKind
     /// would be watching the sequence.
     /// </remarks>
     Rollout,
+
+    /// <summary>
+    /// Puts models into a tenant that keeps running — no container is recreated.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from Upgrade because the undo is different, and that difference is the
+    /// whole reason to name it separately: an Upgrade can be undone by pinning the
+    /// previous image back, this cannot, and its snapshot is the only way out.
+    /// </remarks>
+    InstallModels,
 }
 
 /// <summary>

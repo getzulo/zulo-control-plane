@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Registry;
@@ -243,7 +243,12 @@ public sealed class TenantUpgradeService
         }
     }
 
-    private async Task<Snapshot> TakeSnapshotAsync(
+    /// <summary>
+    /// The pre-change rollback. Public because a runtime model install has no previous
+    /// image to pin back — this snapshot is the ONLY way out, so the path that skips
+    /// the container entirely still has to come through here.
+    /// </summary>
+    public async Task<Snapshot> TakeSnapshotAsync(
         Tenant tenant, string fromTag, string toTag, JobContext? job, CancellationToken ct)
     {
         Directory.CreateDirectory(_snapshots.Path);

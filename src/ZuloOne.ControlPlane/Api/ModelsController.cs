@@ -137,6 +137,33 @@ public class ModelsController : ControllerBase
         });
     }
 
+    /// <summary>Which models to put into one running tenant, and where from.</summary>
+    public sealed record InstallRequest(string? ImageTag, string[] Models);
+
+    /// <summary>
+    /// Installs models into a tenant that keeps serving. No container is recreated.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to a rollout, and deliberately a different verb. A rollout moves
+    /// tenants between images and can be undone by pinning the old one back; this puts
+    /// metadata into a live tenant, where the pre-install snapshot is the only undo.
+    /// </remarks>
+    [HttpPost("/api/tenants/{id:guid}/install-models")]
+    public async Task<IActionResult> Install(Guid id, [FromBody] InstallRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        if (string.IsNullOrWhiteSpace(tenant.DatabasePassword))
+            return BadRequest(new { error = $"'{tenant.Slug}' has no stored database password, so it cannot be snapshotted — and an install with no way back is not one." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.InstallModels, tenant.Id, tenant.Slug,
+            new InstallModelsPayload(request.ImageTag, request.Models ?? []),
+            OperatorIdentity.Of(User), ct);
+
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
+    }
+
     /// <summary>What a rollout should do, from the screen.</summary>
     public sealed record RolloutRequest(
         string? ImageTag,
