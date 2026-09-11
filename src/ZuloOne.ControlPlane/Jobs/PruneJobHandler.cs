@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using ZuloOne.ControlPlane.Api;
+using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 using ZuloOne.ControlPlane.Settings;
 using ZuloOne.ControlPlane.Snapshots;
@@ -6,8 +8,9 @@ using ZuloOne.ControlPlane.Snapshots;
 namespace ZuloOne.ControlPlane.Jobs;
 
 /// <summary>
-/// Keeps the snapshot directory from growing without bound, and keeps the
-/// registry honest about what is on the disk.
+/// Keeps the snapshot directory from growing without bound, keeps the registry
+/// honest about what is on the disk, and keeps the app host from hoarding every
+/// image the fleet has ever run.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,15 +32,21 @@ public sealed class PruneJobHandler : IJobHandler
     private readonly ControlPlaneDbContext _db;
     private readonly SettingsStore _settings;
     private readonly SnapshotSettings _paths;
+    private readonly TenantContainerService _containers;
+    private readonly FleetConfig _fleet;
 
     public PruneJobHandler(
         ControlPlaneDbContext db,
         SettingsStore settings,
-        Microsoft.Extensions.Options.IOptions<SnapshotSettings> paths)
+        Microsoft.Extensions.Options.IOptions<SnapshotSettings> paths,
+        TenantContainerService containers,
+        FleetConfig fleet)
     {
         _db = db;
         _settings = settings;
         _paths = paths.Value;
+        _containers = containers;
+        _fleet = fleet;
     }
 
     public JobKind Kind => JobKind.Prune;
@@ -122,11 +131,109 @@ public sealed class PruneJobHandler : IJobHandler
         await context.StepAsync("Reconciling the directory against the registry", 70, ct);
         var (orphanFiles, orphanBytes, missingFiles) = await ReconcileAsync(all, doomed, graceHours, context, ct);
 
+        await context.StepAsync("Sweeping images the fleet no longer runs", 85, ct);
+        var (imagesRemoved, imageBytes) = await SweepImagesAsync(context, ct);
+
         var free = FreeBytes();
         await context.StepAsync(
             $"Freed {(freed + orphanBytes) / 1024 / 1024} MB — {doomed.Count} expired, {orphanFiles} orphaned, "
-            + $"{missingFiles} row(s) with no file. {free / 1024 / 1024} MB free.",
+            + $"{missingFiles} row(s) with no file. {imagesRemoved} image(s) "
+            + $"({imageBytes / 1024 / 1024} MB) off the app host. {free / 1024 / 1024} MB free.",
             100, ct);
+    }
+
+    /// <summary>
+    /// Old tenant images on the app host.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Nothing else removes them. <c>TenantContainerService.EnsureImageAsync</c>
+    /// PULLS on every provision and every upgrade and there has never been a call
+    /// that deletes one, so the app host gains roughly an image per upgrade — on a
+    /// 120 GB disk it shares with every tenant container.
+    /// </para>
+    ///
+    /// <para>
+    /// Kept: anything a tenant row names, the fleet default, and the newest
+    /// <c>Images:KeepRecent</c> whatever their state. That last one is the rollback
+    /// window — <c>TenantUpgradeService.MoveAsync</c> rolls a tenant back by moving
+    /// it to its PREVIOUS tag, which needs that image to still be here.
+    /// </para>
+    ///
+    /// <para>
+    /// Count, not age, and the difference matters. Snapshots expire by age because
+    /// a dump's timestamp is when it was taken; an image's is when it was BUILT.
+    /// A tenant twenty builds behind would have its rollback target swept the
+    /// instant it upgraded — the image is old, the need for it is one minute old.
+    /// Counting survives that; ageing does not.
+    /// </para>
+    ///
+    /// <para>
+    /// Falling outside the window is not a dead end either. The registry keeps
+    /// every release precisely so it is not — <c>ImagesController.WhyUndeletable</c>
+    /// refuses to delete one — and it is on the LAN, so rolling back past the window
+    /// costs a pull rather than being impossible.
+    /// </para>
+    /// </remarks>
+    private async Task<(int Removed, long Bytes)> SweepImagesAsync(JobContext context, CancellationToken ct)
+    {
+        var keepRecent = _settings.Int("Images:KeepRecent");
+
+        // One definition of how an image name splits, shared with the panel and the
+        // models catalogue. Recombined because RepoTags carry the registry host and
+        // SplitImage hands it back separately.
+        var (registry, repository) = ImagesController.SplitImage(_fleet.DefaultImage);
+        var repo = registry is null ? repository : $"{registry}/{repository}";
+
+        List<DaemonImage> images;
+        try
+        {
+            images = (await _containers.ListImagesAsync(repo, ct)).ToList();
+        }
+        catch (Exception ex)
+        {
+            // The app host being unreachable is a real condition and not this job's
+            // to solve. Snapshots were already swept above; say so and stop.
+            await context.LogAsync($"Could not list images on the app host: {ex.Message}", ct);
+            return (0, 0);
+        }
+
+        // A tenant row names the image even when its container is gone — mid
+        // re-provision, or suspended. The row is the authority, not the daemon.
+        var pinned = await _db.Tenants.AsNoTracking()
+            .Select(t => t.ImageTag)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var keep = new HashSet<string>(pinned.Where(t => !string.IsNullOrWhiteSpace(t))!, StringComparer.Ordinal)
+        {
+            _fleet.DefaultImage,
+        };
+
+        var removed = 0;
+        long bytes = 0;
+        var held = 0;
+        foreach (var image in images.Skip(keepRecent))
+        {
+            if (image.Tags.Any(keep.Contains)) { held++; continue; }
+            if (await _containers.RemoveImageAsync(image.Id, ct))
+            {
+                removed++;
+                bytes += image.Size;
+            }
+            else
+            {
+                // Refused, which means a container still references it — a tenant
+                // whose row was deleted but whose container outlived it, most likely.
+                held++;
+            }
+        }
+
+        await context.LogAsync(
+            $"{images.Count} image(s) of {repo} on the app host: {Math.Min(keepRecent, images.Count)} newest kept, "
+            + $"{held} still referenced, {removed} removed ({bytes / 1024 / 1024} MB).", ct);
+
+        return (removed, bytes);
     }
 
     /// <summary>

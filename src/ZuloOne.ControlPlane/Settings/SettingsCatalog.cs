@@ -146,6 +146,16 @@ public static class SettingsCatalog
             + "to whom. It is small, so this is generous by default.",
             SettingKind.Days, "30", Min: 1, Max: 365),
 
+        new("Images:KeepRecent", Backups,
+            "Recent tenant images kept on the app host",
+            "How many of the newest images stay pulled after the sweep, on top of every image a "
+            + "tenant is pinned to and the fleet default. This is the rollback window: rolling a "
+            + "tenant back moves it to its previous tag, which is instant while that image is still "
+            + "here and a pull from the registry once it is not. Counted rather than aged because "
+            + "an image reports when it was BUILT, and the rollback target of a tenant that was "
+            + "far behind is an old image somebody needs right now.",
+            SettingKind.Int, "5", Min: 1, Max: 100),
+
         // -------------------------------------------------------------- Fleet
         new("Fleet:DefaultImage", Fleet,
             "Image new tenants start on",

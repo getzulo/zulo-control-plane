@@ -5,6 +5,9 @@ using ZuloOne.ControlPlane.Registry;
 
 namespace ZuloOne.ControlPlane.Provisioning;
 
+/// <summary>An image as the daemon reports it, narrowed to one repository.</summary>
+public sealed record DaemonImage(string Id, IReadOnlyList<string> Tags, DateTime Created, long Size);
+
 /// <summary>
 /// Runs, stops and removes tenant containers, and stamps them with the Traefik
 /// labels that publish the subdomain. The container publishes NO ports: Traefik
@@ -282,6 +285,80 @@ public sealed class TenantContainerService
         {
             _logger.LogWarning(ex, "Could not read the labels of {Image}.", image);
             return new Dictionary<string, string>();
+        }
+    }
+
+    /// <summary>
+    /// Every image on this daemon under <paramref name="repository"/>, newest first.
+    /// </summary>
+    /// <remarks>
+    /// Scoped to one repository, and that is the safety property rather than a
+    /// convenience. The app host also carries Traefik and whatever else was put
+    /// there by hand; a sweep that listed everything would be one filter mistake
+    /// away from removing the proxy that fronts the entire fleet.
+    /// </remarks>
+    public async Task<IReadOnlyList<DaemonImage>> ListImagesAsync(string repository, CancellationToken ct = default)
+    {
+        var all = await _docker.Images.ListImagesAsync(new ImagesListParameters { All = false }, ct);
+        return all
+            .Where(i => i.RepoTags is not null && i.RepoTags.Any(t => Owns(repository, t)))
+            .Select(i => new DaemonImage(
+                i.ID,
+                i.RepoTags!.Where(t => Owns(repository, t)).ToList(),
+                i.Created,
+                i.Size))
+            .OrderByDescending(i => i.Created)
+            .ToList();
+    }
+
+    /// <summary>
+    /// <c>repo:tag</c> belongs to <c>repo</c> — and <c>zuloone-core-pg:1</c> does not
+    /// belong to <c>zuloone-core</c>, which a bare StartsWith would have claimed.
+    /// </summary>
+    private static bool Owns(string repository, string tag)
+        => tag.Length > repository.Length
+        && tag[repository.Length] == ':'
+        && tag.StartsWith(repository, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Removes an image and every tag on it. False when the daemon refused.
+    /// </summary>
+    /// <remarks>
+    /// <c>Force = false</c> is load-bearing. The daemon will not remove an image a
+    /// container references, and a SUSPENDED tenant is a stopped container that
+    /// still references one — so the refusal IS the check, and this method does not
+    /// have to reason about tenant state at all. Forcing would turn that guarantee
+    /// into a tenant that cannot be started again.
+    /// </remarks>
+    public async Task<bool> RemoveImageAsync(string id, CancellationToken ct = default)
+    {
+        try
+        {
+            await _docker.Images.DeleteImageAsync(
+                id, new ImageDeleteParameters { Force = false }, ct);
+            return true;
+        }
+        catch (DockerImageNotFoundException) { return true; }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            // In use by a container. The expected outcome for anything still running.
+            return false;
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            // The socket proxy, not the daemon. Worth its own message: a refusal
+            // here is permanent and silent — every sweep would report the whole
+            // fleet as "still referenced" while the disk went on filling — whereas
+            // the Conflict above is the normal, self-correcting case.
+            _logger.LogError(
+                "The Docker socket proxy refused DELETE /images/{Id} with 403. The image sweep "
+                + "cannot reclaim anything until its whitelist allows image deletes.", id);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not remove image {Id}.", id);
+            return false;
         }
     }
 
