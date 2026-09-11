@@ -1,9 +1,9 @@
 ﻿import { useCallback, useMemo, useState } from 'react';
 import {
-  Alert, Badge, Button, Card, Checkbox, Group, Loader, Modal, MultiSelect, Select,
+  ActionIcon, Alert, Badge, Button, Card, Checkbox, Group, Loader, Modal, MultiSelect, Select,
   Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconPackage, IconRocket } from '@tabler/icons-react';
+import { IconAlertTriangle, IconDownload, IconPackage, IconRocket } from '@tabler/icons-react';
 import { api, type ModelCatalogue } from './api';
 import { JobProgress, useJob, usePoll } from './shared';
 
@@ -31,6 +31,9 @@ export function ModelsPage() {
   const [changeModels, setChangeModels] = useState(false);
   const [confirm, setConfirm] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<{ id: string; slug: string } | null>(null);
+  const [installImage, setInstallImage] = useState<string | null>(null);
+  const [installModels, setInstallModels] = useState<string[]>([]);
   const job = useJob(jobId);
 
   const refresh = useCallback(async () => {
@@ -54,6 +57,20 @@ export function ModelsPage() {
     () => (data?.images ?? []).map((i) => ({ value: i.image, label: `${i.image}  (${i.models.length} models)` })),
     [data]);
   const modelOptions = useMemo(() => models.map((m) => m.model), [models]);
+
+  async function install() {
+    if (!installing) return;
+    try {
+      const r = await api.installModels(installing.id, {
+        imageTag: installImage,
+        models: installModels,
+      });
+      setJobId(r.jobId);
+      setInstalling(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   async function start() {
     try {
@@ -176,6 +193,7 @@ export function ModelsPage() {
                 <Table.Th>Image</Table.Th>
                 <Table.Th>Installed</Table.Th>
                 <Table.Th>Behind</Table.Th>
+                <Table.Th />
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -222,6 +240,19 @@ export function ModelsPage() {
                       </Group>
                     </Table.Td>
                     <Table.Td>
+                      <Tooltip label="Install models into this tenant while it runs — no container recreate">
+                        <ActionIcon
+                          variant="subtle"
+                          onClick={() => {
+                            setInstalling({ id: t.id, slug: t.slug });
+                            setInstallImage(null);
+                            setInstallModels(t.installed.filter((m) => !m.isSystem).map((m) => m.name));
+                          }}>
+                          <IconDownload size={16} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Table.Td>
+                    <Table.Td>
                       {behind.length === 0
                         ? <Text size="xs" c="dimmed">—</Text>
                         : (
@@ -235,7 +266,7 @@ export function ModelsPage() {
               })}
               {tenants.length === 0 && (
                 <Table.Tr>
-                  <Table.Td colSpan={5}>
+                  <Table.Td colSpan={6}>
                     <Text ta="center" c="dimmed" py="lg">No tenants yet</Text>
                   </Table.Td>
                 </Table.Tr>
@@ -244,6 +275,46 @@ export function ModelsPage() {
           </Table>
         )}
       </Card>
+      <Modal
+        opened={Boolean(installing)}
+        onClose={() => setInstalling(null)}
+        title={`Install models into ${installing?.slug ?? ''}`}
+        size="lg">
+        <Stack gap="md">
+          <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
+            The container is not recreated — the models go into the tenant while it
+            serves. A snapshot is taken first and it is the ONLY way back: there is no
+            previous image to pin. The install does schema work and a compile, so it is
+            minutes of load on a live tenant, not an instant switch.
+          </Alert>
+
+          <Select
+            label="Take the models from"
+            description="A distribution image. The tenant's own image is used when this is empty — a platform-only image carries none."
+            placeholder="(the tenant's current image)"
+            data={imageOptions}
+            value={installImage}
+            onChange={setInstallImage}
+            clearable
+            searchable
+          />
+
+          <MultiSelect
+            label="Models"
+            description="Empty installs everything the image carries. Installing a subset can leave a model unable to compile if the dependency graph does not declare what it really needs."
+            data={modelOptions}
+            value={installModels}
+            onChange={setInstallModels}
+            searchable
+          />
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setInstalling(null)}>Cancel</Button>
+            <Button color="grape" onClick={() => void install()}>Install now</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
       <Modal opened={planning} onClose={() => setPlanning(false)} title="Roll out" size="lg">
         <Stack gap="md">
           <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
