@@ -356,12 +356,10 @@ jobs:
       # already smoked this one just means the operator copies a version by
       # hand. Tenants are not touched — this compose file has one service.
       #
-      # The runner is zo-ci-1 (registry). The panel is zo-cp-1. Hop is SSH as
-      # deploy; BatchMode so a missing key fails the job instead of hanging
-      # on a password prompt. One-time:
-      #
-      #   ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q
-      #   ssh-copy-id deploy@10.10.0.200
+      # The runner is deploy@zo-ci-1. The panel is zo-cp-1. Hop is
+      # deploy@10.10.0.200 (same user, in docker there). BatchMode so a
+      # missing key fails the job instead of hanging on a password prompt.
+      # The runner's ed25519 key is in deploy@zo-cp-1 authorized_keys.
       - name: Deploy the panel
         id: deploy
         if: >-
