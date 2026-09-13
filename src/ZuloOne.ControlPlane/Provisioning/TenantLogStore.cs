@@ -172,8 +172,10 @@ public sealed class TenantLogStore
         if (_client is null) throw new InvalidOperationException("Journal is not connected.");
 
         var col = Collection(slug);
-        try { await col.Indexes.DropOneAsync("ttl_timestamp", ct); }
-        catch (MongoCommandException) { /* first TTL on this collection */ }
+        // Core 2026.9.20 creates this TTL without a name (Timestamp_1). Dropping
+        // only "ttl_timestamp" left that index in place; the next CreateMany
+        // then 500'd with IndexOptionsConflict and the button died.
+        await DropTtlIndexesAsync(col, ct);
         await EnsureIndexesAsync(col, days, ct);
         Invalidate(slug);
     }
@@ -251,6 +253,20 @@ public sealed class TenantLogStore
         return null;
     }
 
+    internal static async Task DropTtlIndexesAsync(
+        IMongoCollection<BsonDocument> col, CancellationToken ct)
+    {
+        using var cursor = await col.Indexes.ListAsync(ct);
+        foreach (var idx in await cursor.ToListAsync(ct))
+        {
+            if (!idx.Contains("expireAfterSeconds")) continue;
+            var name = idx.GetValue("name", "").AsString;
+            if (string.IsNullOrEmpty(name) || name == "_id_") continue;
+            try { await col.Indexes.DropOneAsync(name, ct); }
+            catch (MongoCommandException) { /* already gone */ }
+        }
+    }
+
     internal static async Task EnsureIndexesAsync(
         IMongoCollection<BsonDocument> col, int ttlDays, CancellationToken ct)
     {
@@ -263,7 +279,7 @@ public sealed class TenantLogStore
             new CreateIndexModel<BsonDocument>(keys.Ascending("JobId")),
             new CreateIndexModel<BsonDocument>(
                 keys.Ascending("Timestamp"),
-                new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(ttlDays), Name = "ttl_timestamp" }),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(ttlDays) }),
         ], ct);
     }
 

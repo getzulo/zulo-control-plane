@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MongoDB.Driver;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
@@ -95,6 +96,10 @@ public sealed class LogsController : ControllerBase
             return Ok(new { ok = true, days = body.Days });
         }
         catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (MongoCommandException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
