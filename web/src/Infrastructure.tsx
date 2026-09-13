@@ -4,7 +4,7 @@ import {
 } from '@mantine/core';
 import { IconAlertTriangle, IconArrowsExchange, IconDatabase } from '@tabler/icons-react';
 import { api, type Cluster, type InfraNode } from './api';
-import { CHECK_COLOR, ROLE_COLOR, ROLE_LABEL, ROLE_ORDER, ago, fmt, usePoll } from './shared';
+import { CHECK_COLOR, ROLE_COLOR, ROLE_LABEL, ROLE_ORDER, ago, usePoll } from './shared';
 
 /** Byte lag reads better as a size than as a number with nine digits. */
 const lag = (n?: number | null) =>
