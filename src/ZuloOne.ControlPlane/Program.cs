@@ -119,6 +119,7 @@ builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
 builder.Services.AddScoped<IJobHandler, UpgradeJobHandler>();
 builder.Services.AddScoped<IJobHandler, RolloutJobHandler>();
 builder.Services.AddScoped<IJobHandler, InstallModelsJobHandler>();
+builder.Services.AddScoped<IJobHandler, CompileModelsJobHandler>();
 builder.Services.AddScoped<IJobHandler, PruneJobHandler>();
 builder.Services.AddScoped<IJobHandler, RegistrySnapshotJobHandler>();
 builder.Services.AddHostedService<JobWorker>();

@@ -238,6 +238,24 @@ public class ModelsController : ControllerBase
         return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
     }
 
+    /// <summary>
+    /// Schema sync, entity types, then scripts — no tree, no snapshot.
+    /// </summary>
+    [HttpPost("/api/tenants/{id:guid}/compile-models")]
+    public async Task<IActionResult> Compile(Guid id, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+            return BadRequest(new { error = $"'{tenant.Slug}' has no signing key, so the panel cannot authenticate to it." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.CompileModels, tenant.Id, tenant.Slug, payload: null,
+            OperatorIdentity.Of(User), ct);
+
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
+    }
+
     /// <summary>What a rollout should do, from the screen.</summary>
     public sealed record RolloutRequest(
         string? ImageTag,

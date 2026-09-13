@@ -5,7 +5,7 @@ import {
   Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import {
-  IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
+  IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconHammer, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
 import { api, type ImageTag, type Job, type LogTenantRow, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
@@ -145,6 +145,12 @@ export function TenantPage() {
             ? <Button size="xs" variant="default" leftSection={<IconPlayerPlay size={14} />} onClick={() => void act(() => api.start(id))}>Start</Button>
             : <Button size="xs" variant="default" leftSection={<IconPlayerStop size={14} />} onClick={() => void act(() => api.stop(id))}>Stop</Button>}
           <Button size="xs" variant="default" leftSection={<IconRotate size={14} />} onClick={() => void act(() => api.restart(id))}>Restart</Button>
+          <Button
+            size="xs" variant="light" leftSection={<IconHammer size={14} />}
+            onClick={async () => { try { setJobId((await api.compileModels(id)).jobId); } catch (e) { setError((e as Error).message); } }}
+          >
+            Compile
+          </Button>
           <Button
             size="xs" variant="light" leftSection={<IconCamera size={14} />}
             disabled={!tenant.databaseName}

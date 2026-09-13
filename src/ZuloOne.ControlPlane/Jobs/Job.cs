@@ -73,6 +73,19 @@ public enum JobKind
     /// previous image back, this cannot, and its snapshot is the only way out.
     /// </remarks>
     InstallModels,
+
+    /// <summary>
+    /// Schema sync + entity types + scripts on a tenant that already has the
+    /// models. No tree is pushed, no snapshot: metadata is not being written.
+    /// </summary>
+    /// <remarks>
+    /// Install-tree on older Core compiled scripts without generating entity
+    /// types first — Accounting then failed CS0246 on ChartOfAccounts /
+    /// IGeneralLedgerService. Re-installing made it worse (FK rollbacks). This
+    /// job is the missing step, and it talks to APIs every current image already
+    /// exposes.
+    /// </remarks>
+    CompileModels,
 }
 
 /// <summary>

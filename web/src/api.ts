@@ -144,6 +144,8 @@ export type JobKind =
   | 'Rollout'
   /** Models put into a tenant that keeps running; no container is recreated. */
   | 'InstallModels'
+  /** Schema + entity types + scripts; no tree is pushed. */
+  | 'CompileModels'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
   | 'Prune'
   /** Dump of the panel's OWN database — the record of which container belongs to whom. */
@@ -673,6 +675,10 @@ export const api = {
     request<{ jobId: string }>(`/api/tenants/${tenantId}/install-models`, {
       method: 'POST', body: JSON.stringify(body),
     }),
+
+  /** Schema sync, entity types, then scripts. Does not push a tree. */
+  compileModels: (tenantId: string) =>
+    request<{ jobId: string }>(`/api/tenants/${tenantId}/compile-models`, { method: 'POST' }),
 
   /** Asks a running job to stop. A wave checks between tenants, never inside one. */
   cancelJob: (id: string) =>

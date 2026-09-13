@@ -113,6 +113,91 @@ public sealed class TenantApiClient
         }
     }
 
+    /// <summary>
+    /// Makes already-installed metadata runnable: tables, generated entity types,
+    /// then scripts. Does not write a model tree.
+    /// </summary>
+    public async Task<TenantInstallResult> MaterializeAsync(
+        Tenant tenant, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+        {
+            return new TenantInstallResult(false, 0, 0,
+                ["The registry holds no signing key for this tenant, so the panel cannot authenticate to it."],
+                [], null);
+        }
+
+        var host = _containers.HostFor(tenant.Slug);
+        using var client = _http.CreateClient("tenant");
+        client.Timeout = timeout;
+
+        async Task<(int Status, string Body)> Post(string path)
+        {
+            var url = $"https://{host}{path}";
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintToken(tenant));
+            using var response = await client.SendAsync(request, ct);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        }
+
+        try
+        {
+            var (schemaStatus, schemaBody) = await Post("/api/schema/sync");
+            if (schemaStatus is < 200 or >= 300)
+            {
+                return new TenantInstallResult(false, 0, 0,
+                    [$"{schemaStatus} schema/sync: {Trim(schemaBody)}"], [], $"https://{host}/api/schema/sync");
+            }
+
+            var (entityStatus, entityBody) = await Post("/api/metadata/compile");
+            if (entityStatus is < 200 or >= 300)
+            {
+                return new TenantInstallResult(false, 0, 0,
+                    [$"{entityStatus} metadata/compile: {Trim(entityBody)}"], [], $"https://{host}/api/metadata/compile");
+            }
+
+            var (scriptStatus, scriptBody) = await Post("/api/metadata/models/compile");
+            if (scriptStatus is < 200 or >= 300)
+            {
+                return new TenantInstallResult(false, 0, 0,
+                    [$"{scriptStatus} models/compile: {Trim(scriptBody)}"], [], $"https://{host}/api/metadata/models/compile");
+            }
+
+            return ParseCompile(scriptBody, $"https://{host}/api/metadata/models/compile");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Materializing models on {Slug} failed.", tenant.Slug);
+            return new TenantInstallResult(false, 0, 0, [$"Could not reach {host}: {ex.Message}"], [], host);
+        }
+    }
+
+    private static TenantInstallResult ParseCompile(string body, string url)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var models = root.TryGetProperty("models", out var list) && list.ValueKind == JsonValueKind.Array
+                ? list
+                : default;
+            var problems = new List<string>();
+            if (models.ValueKind == JsonValueKind.Array)
+            {
+                problems.AddRange(models.EnumerateArray()
+                    .Where(m => m.TryGetProperty("status", out var s)
+                             && !string.Equals(s.GetString(), "Ok", StringComparison.OrdinalIgnoreCase))
+                    .Select(m => $"{Prop(m, "name")}: {Prop(m, "status")} {Prop(m, "error")}".Trim()));
+            }
+
+            return new TenantInstallResult(true, 0, 0, [], problems, url);
+        }
+        catch (JsonException)
+        {
+            return new TenantInstallResult(false, 0, 0, [$"Unreadable compile answer: {Trim(body)}"], [], url);
+        }
+    }
+
     private static TenantInstallResult Parse(string body, string url)
     {
         try
@@ -131,7 +216,7 @@ public sealed class TenantApiClient
                 problems.AddRange(compiled.EnumerateArray()
                     .Where(m => m.TryGetProperty("status", out var s)
                              && !string.Equals(s.GetString(), "Ok", StringComparison.OrdinalIgnoreCase))
-                    .Select(m => $"{Get(m, "name")}: {Get(m, "status")} {Get(m, "error")}".Trim()));
+                    .Select(m => $"{Prop(m, "name")}: {Prop(m, "status")} {Prop(m, "error")}".Trim()));
             }
 
             return new TenantInstallResult(
@@ -144,9 +229,6 @@ public sealed class TenantApiClient
         {
             return new TenantInstallResult(false, 0, 0, [$"Unreadable answer from the tenant: {Trim(body)}"], [], url);
         }
-
-        static string Get(JsonElement e, string name) =>
-            e.TryGetProperty(name, out var v) ? v.ToString() : string.Empty;
     }
 
     private static string MintToken(Tenant tenant)
@@ -169,6 +251,9 @@ public sealed class TenantApiClient
             signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
+    private static string Prop(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) ? v.ToString() : string.Empty;
 
     private static string Trim(string s) => s.Length <= 300 ? s : s[..300] + "…";
 }

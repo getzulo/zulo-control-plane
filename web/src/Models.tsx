@@ -4,7 +4,7 @@ import {
   Stack, Table, Text, TextInput, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import {
-  IconAlertTriangle, IconChevronDown, IconChevronRight, IconDownload, IconPackage, IconRocket,
+  IconAlertTriangle, IconChevronDown, IconChevronRight, IconDownload, IconHammer, IconPackage, IconRocket,
 } from '@tabler/icons-react';
 import { api, type ModelCatalogue } from './api';
 import { JobProgress, useJob, usePoll } from './shared';
@@ -238,11 +238,21 @@ export function ModelsPage() {
                           )}
                       </Table.Td>
                       <Table.Td>
-                        <Tooltip label="Install or update models while this tenant keeps serving">
-                          <ActionIcon variant="subtle" onClick={() => openInstall(t)}>
-                            <IconDownload size={16} />
-                          </ActionIcon>
-                        </Tooltip>
+                        <Group gap={4} wrap="nowrap">
+                          <Tooltip label="Generate tables and types, then compile scripts — no install">
+                            <ActionIcon variant="subtle" onClick={async () => {
+                              try { setJobId((await api.compileModels(t.id)).jobId); }
+                              catch (e) { setError((e as Error).message); }
+                            }}>
+                              <IconHammer size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                          <Tooltip label="Install or update models while this tenant keeps serving">
+                            <ActionIcon variant="subtle" onClick={() => openInstall(t)}>
+                              <IconDownload size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                     {open && (
