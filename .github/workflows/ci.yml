@@ -357,9 +357,10 @@ jobs:
       # hand. Tenants are not touched — this compose file has one service.
       #
       # The runner is deploy@zo-ci-1. The panel is zo-cp-1. Hop is
-      # deploy@10.10.0.200 (same user, in docker there). BatchMode so a
-      # missing key fails the job instead of hanging on a password prompt.
-      # The runner's ed25519 key is in deploy@zo-cp-1 authorized_keys.
+      # deploy@10.10.0.200 (same user, in docker there, no sudo). BatchMode
+      # so a missing key fails the job instead of hanging on a password
+      # prompt. cp.env must be root:deploy 0640 — Compose reads it as
+      # deploy, and 0600 is how the first green publish died after pull.
       - name: Deploy the panel
         id: deploy
         if: >-
