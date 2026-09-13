@@ -246,7 +246,7 @@ export function ModelsPage() {
                       </Table.Td>
                     </Table.Tr>
                     {open && (
-                      <Table.Tr>
+                      <Table.Tr className="zo-models-detail">
                         <Table.Td colSpan={8} p={0}>
                           <TenantModelsDetail tenant={t} catalogue={models} onInstall={openInstall} />
                         </Table.Td>
@@ -442,15 +442,7 @@ function TenantModelsDetail({
 }) {
   const rows = tenant.installed.filter((m) => !m.isSystem);
   return (
-    <Stack
-      gap="sm"
-      p="sm"
-      style={{
-        // gray-0 is always near-white — a flash-bang on the dark panel.
-        // The canvas token is the recessed surface in both schemes.
-        background: 'var(--zo-canvas)',
-        borderTop: '1px solid var(--zo-hairline)',
-      }}>
+    <Stack gap="sm" p="sm">
       <Group gap="xs">
         {tenant.outdatedCount > 0 && (
           <Button size="xs" variant="light" color="yellow" onClick={() => onInstall(tenant)}>
@@ -469,7 +461,7 @@ function TenantModelsDetail({
           Choose models…
         </Button>
       </Group>
-      <Table fz="sm" withRowBorders={false}>
+      <Table fz="sm" withRowBorders={false} withTableBorder={false} className="zo-models-detail-table">
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Model</Table.Th>

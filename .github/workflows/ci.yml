@@ -351,6 +351,85 @@ jobs:
           docker push "${REGISTRY}/${IMAGE}:${{ steps.ver.outputs.version }}"
           docker push "${REGISTRY}/${IMAGE}:sha-$(git rev-parse --short HEAD)"
 
+      # Temporary: a green master/tag build IS the rollout. There is no promote
+      # step yet, and leaving the live panel on last week's tag after CI has
+      # already smoked this one just means the operator copies a version by
+      # hand. Tenants are not touched — this compose file has one service.
+      #
+      # The runner is zo-ci-1 (registry). The panel is zo-cp-1. Hop is SSH as
+      # deploy; BatchMode so a missing key fails the job instead of hanging
+      # on a password prompt. One-time:
+      #
+      #   ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -q
+      #   ssh-copy-id deploy@10.10.0.200
+      - name: Deploy the panel
+        id: deploy
+        if: >-
+          steps.ver.outputs.publish == 'true' &&
+          github.event_name != 'pull_request'
+        env:
+          CP_DEPLOY_HOST: 10.10.0.200
+          CP_DEPLOY_USER: deploy
+          CP_DEPLOY_DIR: /opt/zuloone
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${{ steps.ver.outputs.version }}"
+          dest="${CP_DEPLOY_USER}@${CP_DEPLOY_HOST}"
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 \
+               -o StrictHostKeyChecking=accept-new \
+               "$dest" true; then
+            echo "::error::Cannot SSH to ${dest} (BatchMode). The image is in the registry; the panel was not rolled."
+            echo "::error::On this runner, as the same user: ssh-copy-id ${dest}"
+            exit 1
+          fi
+          ssh -o BatchMode=yes "$dest" bash -s -- "$v" "$CP_DEPLOY_DIR" <<'REMOTE'
+          set -euo pipefail
+          v="$1"
+          dir="$2"
+          cd "$dir"
+          if [ -f docker-compose.controlplane.yml ]; then
+            compose=docker-compose.controlplane.yml
+          elif [ -f docker-compose.yml ]; then
+            compose=docker-compose.yml
+          else
+            echo "::error::No compose file in ${dir}." >&2
+            exit 1
+          fi
+          # Persist so a later `docker compose up` without the env var refuses
+          # for the right reason (missing file) rather than an empty tag.
+          if [ -f .env ]; then
+            grep -v '^CP_VERSION=' .env > .env.next || true
+          else
+            : > .env.next
+          fi
+          echo "CP_VERSION=${v}" >> .env.next
+          mv .env.next .env
+          chmod 600 .env
+          docker compose -f "$compose" pull controlplane
+          docker compose -f "$compose" up -d controlplane
+          ok=false
+          body=""
+          for i in $(seq 1 40); do
+            if body=$(curl -fsS http://127.0.0.1:5099/health 2>/dev/null); then
+              ok=true
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::Panel never became healthy after ${v}." >&2
+            docker logs --tail 200 zuloone-controlplane || true
+            exit 1
+          fi
+          if ! printf '%s' "$body" | tr -d ' ' | grep -q "\"version\":\"${v}\""; then
+            echo "::error::Panel is up but /health is not ${v}. Reported: ${body}" >&2
+            exit 1
+          fi
+          echo "panel: $body"
+          REMOTE
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+
       - name: Summary
         if: always()
         shell: bash
@@ -360,6 +439,7 @@ jobs:
             echo "|---|---|"
             echo "| image | \`${IMAGE}:${{ steps.ver.outputs.version }}\` |"
             echo "| published | \`${{ steps.ver.outputs.publish }}\` |"
+            echo "| deployed | \`${{ steps.deploy.outputs.deployed || 'false' }}\` |"
             echo "| ref | \`${GITHUB_REF}\` |"
             echo "| commit | \`${GITHUB_SHA:0:7}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

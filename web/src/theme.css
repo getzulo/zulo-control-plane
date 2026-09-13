@@ -62,6 +62,26 @@ body {
   color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2));
 }
 
+/* Expanded tenant row sits inside a striped table — the stripe (and hover)
+   is gray-0 / white and blows out the dark scheme. Pin the detail to the
+   same surface as the card. */
+tr.zo-models-detail,
+tr.zo-models-detail > td {
+  background: var(--zo-surface) !important;
+}
+
+tr.zo-models-detail > td {
+  border-top: 1px solid var(--zo-hairline);
+}
+
+.zo-models-detail-table,
+.zo-models-detail-table table,
+.zo-models-detail-table thead,
+.zo-models-detail-table th,
+.zo-models-detail-table td {
+  background: transparent !important;
+}
+
 /* Card headings sit closer to their content than Mantine's default rhythm. */
 .mantine-Card-root > .mantine-Text-root:first-child {
   letter-spacing: -0.005em;
