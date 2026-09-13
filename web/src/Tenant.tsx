@@ -331,7 +331,7 @@ export function TenantPage() {
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>Model</Table.Th><Table.Th>Installed</Table.Th>
-                    <Table.Th>Image offers</Table.Th><Table.Th>Compiles</Table.Th>
+                    <Table.Th>Latest</Table.Th><Table.Th>Compiles</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -354,17 +354,17 @@ export function TenantPage() {
                       </Table.Td>
                       <Table.Td><Code fz={11}>{m.version ?? '—'}</Code></Table.Td>
                       <Table.Td>
-                        {m.offers
+                        {m.latest || m.offers
                           ? <Group gap={4}>
-                              <Code fz={11}>{m.offers}</Code>
-                              {m.behind && <Badge size="xs" color="orange">newer</Badge>}
+                              <Code fz={11}>{m.latest ?? m.offers}</Code>
+                              {m.behind && <Badge size="xs" color="orange">outdated</Badge>}
                             </Group>
                           : <Text size="xs" c="dimmed">—</Text>}
                       </Table.Td>
                       <Table.Td>
                         {m.compilationStatus
                           ? <Tooltip label={m.compilationError ?? 'No error recorded'} multiline w={360} withArrow disabled={!m.compilationError}>
-                              <Badge color={m.compilationStatus === 'Ok' ? 'green' : 'red'}>{m.compilationStatus}</Badge>
+                              <Badge color={m.compiles !== false ? 'green' : 'red'}>{m.compilationStatus}</Badge>
                             </Tooltip>
                           : <Text size="xs" c="dimmed">—</Text>}
                       </Table.Td>

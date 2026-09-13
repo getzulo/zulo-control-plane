@@ -1,5 +1,7 @@
-﻿using System.Formats.Tar;
+﻿using System.Collections.Concurrent;
+using System.Formats.Tar;
 using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 
 namespace ZuloOne.ControlPlane.Provisioning;
@@ -48,11 +50,27 @@ public sealed class ImageTreeReader
 
     private readonly IHttpClientFactory _http;
     private readonly ILogger<ImageTreeReader> _logger;
+    private static readonly ConcurrentDictionary<string, IReadOnlyList<ModelGraphNode>> GraphCache = new(StringComparer.Ordinal);
 
     public ImageTreeReader(IHttpClientFactory http, ILogger<ImageTreeReader> logger)
     {
         _http = http;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Names, versions and dependencies from the image's workspace. Cached per
+    /// image tag — the layer does not change under a pinned tag.
+    /// </summary>
+    public async Task<IReadOnlyList<ModelGraphNode>> ReadGraphAsync(
+        string image, CancellationToken ct = default)
+    {
+        if (GraphCache.TryGetValue(image, out var cached)) return cached;
+
+        var files = await ReadModelJsonsAsync(image, ct);
+        var graph = (IReadOnlyList<ModelGraphNode>)ModelGraph.Parse(files);
+        GraphCache[image] = graph;
+        return graph;
     }
 
     /// <summary>
@@ -98,6 +116,68 @@ public sealed class ImageTreeReader
         }
 
         return null;
+    }
+
+    private async Task<List<(string Path, string Json)>> ReadModelJsonsAsync(
+        string image, CancellationToken ct)
+    {
+        var empty = new List<(string, string)>();
+        var (registry, repository) = Api.ImagesController.SplitImage(image);
+        if (registry is null) return empty;
+        var reference = image.Contains(':') && image.LastIndexOf(':') > image.LastIndexOf('/')
+            ? image[(image.LastIndexOf(':') + 1)..]
+            : "latest";
+
+        using var client = _http.CreateClient("registry");
+        var layers = await LayersAsync(client, registry, repository, reference, ct);
+        if (layers.Count == 0) return empty;
+
+        for (var i = layers.Count - 1; i >= 0; i--)
+        {
+            var (digest, size) = layers[i];
+            if (size > MaxLayerBytes) continue;
+            var files = await CollectModelJsonsAsync(client, registry, repository, digest, ct);
+            if (files.Count > 0) return files;
+        }
+
+        return empty;
+    }
+
+    private async Task<List<(string Path, string Json)>> CollectModelJsonsAsync(
+        HttpClient client, string registry, string repository, string digest, CancellationToken ct)
+    {
+        var files = new List<(string, string)>();
+        try
+        {
+            using var response = await client.GetAsync(
+                $"http://{registry}/v2/{repository}/blobs/{digest}", HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode) return files;
+
+            await using var blob = await response.Content.ReadAsStreamAsync(ct);
+            await using var gzip = new GZipStream(blob, CompressionMode.Decompress);
+            using var reader = new TarReader(gzip);
+            while (await reader.GetNextEntryAsync(copyData: true, ct) is { } entry)
+            {
+                if (entry.DataStream is null) continue;
+                var name = entry.Name.TrimStart('.', '/');
+                if (!name.StartsWith(TreeRoot, StringComparison.Ordinal)) continue;
+                var relative = name[TreeRoot.Length..];
+                if (!relative.EndsWith("/model.json", StringComparison.OrdinalIgnoreCase)
+                    && !relative.Equals("model.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                using var buffer = new MemoryStream();
+                await entry.DataStream.CopyToAsync(buffer, ct);
+                files.Add((relative, Encoding.UTF8.GetString(buffer.ToArray())));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read model.json files from {Digest} of {Repository}.", digest, repository);
+        }
+
+        return files;
     }
 
     private async Task<List<(string Digest, long Size)>> LayersAsync(

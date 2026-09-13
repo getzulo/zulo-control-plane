@@ -252,8 +252,11 @@ export interface TenantModels {
     isEnabled: boolean;
     compilationStatus?: string | null;
     compilationError?: string | null;
-    /** What the image offers for this model, when it offers one. */
+    compiles?: boolean;
+    /** What the tenant's own image offers, when it is a distribution image. */
     offers?: string | null;
+    /** Newest version any registry image carries. */
+    latest?: string | null;
     behind: boolean;
   }[];
   /** In the image and not in the database — excluded by the allow-list, or a failed install. */
@@ -264,9 +267,14 @@ export interface ModelCatalogue {
   /** Set when the registry could not be reached; the rest is still shaped. */
   error?: string | null;
   registry?: string | null;
+  /** Distribution image the page installs from (not the tenant's zuloone-core pin). */
+  sourceImage?: string | null;
   /** Every model any image declares, with the versions available and where each lives. */
   models: {
     model: string;
+    latest: string;
+    isSystem: boolean;
+    dependsOn: string[];
     versions: { version: string; images: string[] }[];
   }[];
   /** One row per image that declares a model set. Images without one are the platform. */
@@ -284,8 +292,12 @@ export interface ModelCatalogue {
     imageTag: string;
     status: string;
     error?: string | null;
+    sourceImage?: string | null;
     /** What the tenant's image declares. Null means its labels could not be read. */
     carries?: { name: string; version: string }[] | null;
+    outdatedCount: number;
+    brokenCount: number;
+    missingCount: number;
     installed: {
       name: string;
       version?: string | null;
@@ -293,8 +305,12 @@ export interface ModelCatalogue {
       isEnabled: boolean;
       compilationStatus?: string | null;
       compilationError?: string | null;
+      compiles: boolean;
       offers?: string | null;
+      latest?: string | null;
+      outdated: boolean;
     }[];
+    missing: { name: string; version: string }[];
   }[];
 }
 

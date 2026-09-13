@@ -69,6 +69,14 @@ public sealed class InstallModelsJobHandler : IJobHandler
 
         var source = string.IsNullOrWhiteSpace(payload.ImageTag) ? tenant.ImageTag : payload.ImageTag!;
         var wanted = payload.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (wanted.Count > 0)
+        {
+            var graph = (await _trees.ReadGraphAsync(source, ct))
+                .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+            wanted = ModelGraph.Expand(wanted, graph)
+                .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
+                .ToList();
+        }
 
         await context.StepAsync("Snapshotting — the only way back from this", 10, ct);
         var snapshot = await _upgrades.TakeSnapshotAsync(tenant, tenant.ImageTag, source, context, ct);

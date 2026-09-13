@@ -194,6 +194,8 @@ public class TenantsController : ControllerBase
         Guid id,
         [FromServices] TenantModelsService models,
         [FromServices] TenantContainerService containers,
+        [FromServices] RegistryModelCatalog catalogue,
+        [FromServices] FleetConfig fleet,
         CancellationToken ct)
     {
         var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
@@ -211,6 +213,23 @@ public class TenantsController : ControllerBase
             .Where(parts => parts.Length == 2)
             .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.OrdinalIgnoreCase);
 
+        var latest = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var (registry, _) = ImagesController.SplitImage(fleet.DefaultImage);
+        if (registry is not null)
+        {
+            foreach (var image in await catalogue.ReadAsync(registry, ct))
+            {
+                foreach (var model in image.Models)
+                {
+                    if (!latest.TryGetValue(model.Name, out var have)
+                        || ModelGraph.CompareVersions(have, model.Version) < 0)
+                    {
+                        latest[model.Name] = model.Version;
+                    }
+                }
+            }
+        }
+
         var installedByName = installed.ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
 
         return Ok(new
@@ -223,25 +242,28 @@ public class TenantsController : ControllerBase
             platformBuild = labels.GetValueOrDefault("one.zulo.platform"),
             workspaceCommit = labels.GetValueOrDefault("one.zulo.workspace"),
             carriesPackages = offered.Count > 0,
-            models = installed.Select(m => new
+            models = installed.Select(m =>
             {
-                m.Name,
-                m.Version,
-                m.Publisher,
-                m.IsSystem,
-                m.IsEnabled,
-                m.CompilationStatus,
-                m.CompilationError,
-                offers = offered.GetValueOrDefault(m.Name),
-                // Behind what the image carries. Not an error — a tenant may sit a
-                // version back deliberately — but it is the thing an operator came
-                // to this page to find out.
-                behind = offered.TryGetValue(m.Name, out var v)
-                         && !string.Equals(v, m.Version, StringComparison.OrdinalIgnoreCase),
+                latest.TryGetValue(m.Name, out var newest);
+                offered.TryGetValue(m.Name, out var imageOffers);
+                return new
+                {
+                    m.Name,
+                    m.Version,
+                    m.Publisher,
+                    m.IsSystem,
+                    m.IsEnabled,
+                    m.CompilationStatus,
+                    m.CompilationError,
+                    compiles = ModelGraph.CompilesOk(m.CompilationStatus),
+                    offers = imageOffers,
+                    latest = newest,
+                    behind = !m.IsSystem && ModelGraph.IsOutdated(m.Version, newest ?? imageOffers),
+                };
             }),
-            // In the image and NOT in the database: either never installed because
-            // the tenant's allow-list excludes it, or the install failed.
-            notInstalled = offered.Where(kv => !installedByName.ContainsKey(kv.Key))
+            // In the catalogue (or the tenant's own image) and NOT in the database.
+            notInstalled = latest
+                .Where(kv => !installedByName.ContainsKey(kv.Key))
                 .Select(kv => new { name = kv.Key, version = kv.Value }),
         });
     }

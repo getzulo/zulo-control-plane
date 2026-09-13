@@ -33,6 +33,7 @@ public class ModelsController : ControllerBase
     private readonly ControlPlaneDbContext _db;
     private readonly RegistryModelCatalog _catalogue;
     private readonly TenantModelsService _tenantModels;
+    private readonly ImageTreeReader _trees;
     private readonly FleetConfig _fleet;
     private readonly IJobQueue _queue;
 
@@ -40,12 +41,14 @@ public class ModelsController : ControllerBase
         ControlPlaneDbContext db,
         RegistryModelCatalog catalogue,
         TenantModelsService tenantModels,
+        ImageTreeReader trees,
         FleetConfig fleet,
         IJobQueue queue)
     {
         _db = db;
         _catalogue = catalogue;
         _tenantModels = tenantModels;
+        _trees = trees;
         _fleet = fleet;
         _queue = queue;
     }
@@ -66,6 +69,11 @@ public class ModelsController : ControllerBase
         }
 
         var images = await _catalogue.ReadAsync(registry, ct);
+        var sourceImage = PickDistribution(images);
+        var graphNodes = sourceImage is null
+            ? []
+            : await _trees.ReadGraphAsync(sourceImage, ct);
+        var graph = graphNodes.ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
 
         // model → version → the tags that carry it. Sorted newest-looking first so the
         // row reads as "this is current, these are the older ones still available".
@@ -73,20 +81,32 @@ public class ModelsController : ControllerBase
             .SelectMany(i => i.Models.Select(m => (i, m)))
             .GroupBy(x => x.m.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(g => new
+            .Select(g =>
             {
-                model = g.Key,
-                versions = g
-                    .GroupBy(x => x.m.Version, StringComparer.OrdinalIgnoreCase)
-                    .OrderByDescending(v => v.Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(v => new
-                    {
-                        version = v.Key,
-                        images = v.Select(x => x.i.Image).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList(),
-                    })
-                    .ToList(),
+                var latest = g
+                    .Select(x => x.m.Version)
+                    .OrderByDescending(v => v, Comparer<string>.Create(ModelGraph.CompareVersions))
+                    .First();
+                graph.TryGetValue(g.Key, out var node);
+                return new
+                {
+                    model = g.Key,
+                    latest,
+                    isSystem = node?.IsSystem ?? false,
+                    dependsOn = node?.DependsOn ?? [],
+                    versions = g
+                        .GroupBy(x => x.m.Version, StringComparer.OrdinalIgnoreCase)
+                        .OrderByDescending(v => v.Key, Comparer<string>.Create(ModelGraph.CompareVersions))
+                        .Select(v => new
+                        {
+                            version = v.Key,
+                            images = v.Select(x => x.i.Image).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToList(),
+                        })
+                        .ToList(),
+                };
             })
             .ToList();
+        var latestByName = models.ToDictionary(m => m.model, m => m.latest, StringComparer.OrdinalIgnoreCase);
 
         var tenants = new List<object>();
         foreach (var tenant in await _db.Tenants.AsNoTracking().OrderBy(t => t.Slug).ToListAsync(ct))
@@ -95,6 +115,35 @@ public class ModelsController : ControllerBase
             // costs its own row, not the screen.
             var (installed, error) = await _tenantModels.ReadAsync(tenant, ct);
             var offered = images.FirstOrDefault(i => string.Equals(i.Image, tenant.ImageTag, StringComparison.Ordinal));
+            var installedRows = installed.Select(m =>
+            {
+                latestByName.TryGetValue(m.Name, out var latest);
+                var offers = offered?.Models
+                    .FirstOrDefault(o => string.Equals(o.Name, m.Name, StringComparison.OrdinalIgnoreCase))?.Version;
+                var outdated = !m.IsSystem && ModelGraph.IsOutdated(m.Version, latest);
+                return new
+                {
+                    m.Name,
+                    m.Version,
+                    m.IsSystem,
+                    m.IsEnabled,
+                    m.CompilationStatus,
+                    m.CompilationError,
+                    compiles = ModelGraph.CompilesOk(m.CompilationStatus),
+                    offers,
+                    latest,
+                    outdated,
+                };
+            }).ToList();
+            var missing = latestByName.Keys
+                .Where(name =>
+                {
+                    graph.TryGetValue(name, out var node);
+                    return node is not { IsSystem: true }
+                           && installed.All(m => !string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+                })
+                .Select(name => new { name, version = latestByName[name] })
+                .ToList();
 
             tenants.Add(new
             {
@@ -103,26 +152,22 @@ public class ModelsController : ControllerBase
                 imageTag = tenant.ImageTag,
                 status = tenant.Status.ToString(),
                 error,
+                sourceImage,
                 // Null, not empty: "this image declares nothing" and "we could not read
                 // it" are different answers and the screen should not merge them.
                 carries = offered?.Models.Select(m => new { name = m.Name, version = m.Version }).ToList(),
-                installed = installed.Select(m => new
-                {
-                    m.Name,
-                    m.Version,
-                    m.IsSystem,
-                    m.IsEnabled,
-                    m.CompilationStatus,
-                    m.CompilationError,
-                    offers = offered?.Models
-                        .FirstOrDefault(o => string.Equals(o.Name, m.Name, StringComparison.OrdinalIgnoreCase))?.Version,
-                }).ToList(),
+                outdatedCount = installedRows.Count(m => m.outdated),
+                brokenCount = installedRows.Count(m => !m.compiles),
+                missingCount = missing.Count,
+                installed = installedRows,
+                missing,
             });
         }
 
         return Ok(new
         {
             registry,
+            sourceImage,
             models,
             images = images.Select(i => new
             {
@@ -136,6 +181,23 @@ public class ModelsController : ControllerBase
             tenants,
         });
     }
+
+    /// <summary>
+    /// The distribution image the page installs FROM. Tenants usually run
+    /// <c>zuloone-core</c>, which carries no tree — the newest <c>zuloone</c> tag does.
+    /// </summary>
+    public static string? PickDistribution(IReadOnlyList<CatalogueImage> images) =>
+        images
+            .Where(i => !i.Repository.EndsWith("zuloone-core", StringComparison.OrdinalIgnoreCase))
+            .Where(i => i.Models.Count > 0)
+            .OrderByDescending(i => i.Tag, Comparer<string>.Create(ModelGraph.CompareVersions))
+            .Select(i => i.Image)
+            .FirstOrDefault()
+        ?? images
+            .Where(i => i.Models.Count > 0)
+            .OrderByDescending(i => i.Models.Count)
+            .Select(i => i.Image)
+            .FirstOrDefault();
 
     /// <summary>Which models to put into one running tenant, and where from.</summary>
     public sealed record InstallRequest(string? ImageTag, string[] Models);
@@ -156,9 +218,20 @@ public class ModelsController : ControllerBase
         if (string.IsNullOrWhiteSpace(tenant.DatabasePassword))
             return BadRequest(new { error = $"'{tenant.Slug}' has no stored database password, so it cannot be snapshotted — and an install with no way back is not one." });
 
+        var wanted = request.Models ?? [];
+        var source = string.IsNullOrWhiteSpace(request.ImageTag) ? tenant.ImageTag : request.ImageTag;
+        if (wanted.Length > 0)
+        {
+            var graph = (await _trees.ReadGraphAsync(source, ct))
+                .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+            wanted = ModelGraph.Expand(wanted, graph)
+                .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
+                .ToArray();
+        }
+
         var job = await _queue.EnqueueAsync(
             JobKind.InstallModels, tenant.Id, tenant.Slug,
-            new InstallModelsPayload(request.ImageTag, request.Models ?? []),
+            new InstallModelsPayload(request.ImageTag, wanted),
             OperatorIdentity.Of(User), ct);
 
         return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
