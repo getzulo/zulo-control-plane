@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  Alert, Badge, Button, Card, Code, Group, Modal, Select, SimpleGrid, Stack, Switch, Table, Text,
-  TextInput, Title,
+  Alert, Badge, Button, Card, Code, Group, Modal, NumberInput, Select, SimpleGrid, Stack, Switch,
+  Table, Text, TextInput, Title,
 } from '@mantine/core';
 import { IconAlertTriangle, IconNotes, IconTrash } from '@tabler/icons-react';
 import { api, type LogEventRow, type LogStoreStatus, type LogTenantRow } from './api';
@@ -48,7 +48,7 @@ export function LogsPage() {
   const [purge, setPurge] = useState<{ slug: string; all: boolean } | null>(null);
   const [confirm, setConfirm] = useState('');
   const [ttlSlug, setTtlSlug] = useState<string | null>(null);
-  const [ttlDays, setTtlDays] = useState('14');
+  const [ttlDays, setTtlDays] = useState(14);
 
   const windowUtc = useMemo(() => {
     const to = new Date().toISOString();
@@ -174,7 +174,7 @@ export function LogsPage() {
                         tenant
                       </Button>
                       <Button size="compact-xs" variant="light" disabled={!r.databaseExists}
-                        onClick={() => { setTtlSlug(r.slug); setTtlDays(String(r.ttlDays ?? 14)); }}>
+                        onClick={() => { setTtlSlug(r.slug); setTtlDays(r.ttlDays ?? 14); }}>
                         TTL
                       </Button>
                       <Button size="compact-xs" variant="light" color="orange" disabled={!r.databaseExists}
@@ -343,11 +343,19 @@ export function LogsPage() {
 
       <Modal opened={Boolean(ttlSlug)} onClose={() => setTtlSlug(null)} title={`TTL · ${ttlSlug}`}>
         <Stack>
-          <TextInput label="Days" value={ttlDays} onChange={(e) => setTtlDays(e.currentTarget.value)} />
+          <NumberInput
+            label="Days"
+            value={ttlDays}
+            min={1}
+            max={3650}
+            step={1}
+            allowDecimal={false}
+            onChange={(n) => setTtlDays(typeof n === 'number' ? n : Number(n) || 1)}
+          />
           <Button onClick={async () => {
             if (!ttlSlug) return;
             try {
-              await api.setLogTtl(ttlSlug, Number(ttlDays));
+              await api.setLogTtl(ttlSlug, ttlDays);
               setTtlSlug(null);
               void refreshFleet();
             } catch (e) { setError((e as Error).message); }
