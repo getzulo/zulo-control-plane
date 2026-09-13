@@ -375,6 +375,9 @@ export function ModelsPage() {
                       {m.dependsOn.length > 0 && (
                         <Text size="xs" c="dimmed">depends on {m.dependsOn.join(', ')}</Text>
                       )}
+                      {(m.extends ?? []).length > 0 && (
+                        <Text size="xs" c="dimmed">extends {(m.extends ?? []).join(', ')}</Text>
+                      )}
                       {requiredBy.length > 0 && (
                         <Text size="xs" c="dimmed">locked — {requiredBy.join(', ')} need this</Text>
                       )}

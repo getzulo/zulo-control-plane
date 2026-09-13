@@ -293,6 +293,8 @@ export interface ModelCatalogue {
     latest: string;
     isSystem: boolean;
     dependsOn: string[];
+    /** Models this one adds fields to. Not an install requirement. */
+    extends?: string[];
     versions: { version: string; images: string[] }[];
   }[];
   /** One row per image that declares a model set. Images without one are the platform. */

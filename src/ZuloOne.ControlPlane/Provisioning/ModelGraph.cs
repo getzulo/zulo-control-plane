@@ -7,7 +7,8 @@ public sealed record ModelGraphNode(
     string Name,
     string Version,
     bool IsSystem,
-    IReadOnlyList<string> DependsOn);
+    IReadOnlyList<string> DependsOn,
+    IReadOnlyList<string> Extends);
 
 /// <summary>
 /// Dependency walk and version compare for the models page. The graph comes from
@@ -49,12 +50,13 @@ public static class ModelGraph
     }
 
     /// <summary>
-    /// Reads a workspace tree into named nodes. Declared dependencies come from
-    /// <c>model.json</c> (<c>metaId</c>, then the <c>Name-&gt;DependsOn</c>
-    /// convention). Extension files add an implicit edge to the target's owner:
-    /// Accounting does not list Production, but it ships
-    /// <c>BillOfMaterials.Accounting</c>, and installing one without the other
-    /// fails the tenant's Extensions phase on a missing FK.
+    /// Reads a workspace tree into named nodes. Install dependencies come from
+    /// <c>model.json</c> only (<c>metaId</c>, then the <c>Name-&gt;DependsOn</c>
+    /// convention). Extensions of another model's objects are recorded on
+    /// <see cref="ModelGraphNode.Extends"/> and are NOT install edges: picking
+    /// Accounting must not pull Production/Sales just because it ships
+    /// <c>BillOfMaterials.Accounting</c>. Those fields apply when the target
+    /// model is already there.
     /// </summary>
     public static List<ModelGraphNode> Parse(IEnumerable<(string Path, string Json)> files)
     {
@@ -153,12 +155,16 @@ public static class ModelGraph
                 if (byId.TryGetValue(id, out var name)) depends.Add(name);
             }
             foreach (var name in r.DepNames) depends.Add(name);
-            if (extraDeps.TryGetValue(r.Name, out var extra))
-            {
-                foreach (var name in extra) depends.Add(name);
-            }
             depends.Remove(r.Name);
-            return new ModelGraphNode(r.Name, r.Version, r.IsSystem, depends.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
+            var extends = extraDeps.TryGetValue(r.Name, out var extra)
+                ? extra.Where(n => !depends.Contains(n)).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
+                : [];
+            return new ModelGraphNode(
+                r.Name,
+                r.Version,
+                r.IsSystem,
+                depends.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(),
+                extends);
         }).ToList();
     }
 

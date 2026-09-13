@@ -77,7 +77,7 @@ public sealed class ModelGraphTests
     }
 
     [Fact]
-    public void Parse_treats_extension_targets_as_dependencies()
+    public void Parse_records_extension_targets_as_extends_not_depends()
     {
         var accounting = """
             {
@@ -136,12 +136,14 @@ public sealed class ModelGraphTests
         ]).ToDictionary(n => n.Name);
 
         Assert.Contains("Common", graph["Accounting"].DependsOn);
-        Assert.Contains("Production", graph["Accounting"].DependsOn);
-        Assert.Contains("Sales", graph["Accounting"].DependsOn);
+        Assert.DoesNotContain("Production", graph["Accounting"].DependsOn);
+        Assert.DoesNotContain("Sales", graph["Accounting"].DependsOn);
+        Assert.Contains("Production", graph["Accounting"].Extends);
+        Assert.Contains("Sales", graph["Accounting"].Extends);
     }
 
     [Fact]
-    public void Expand_pulls_extension_target_models()
+    public void Expand_does_not_pull_extension_target_models()
     {
         var accounting = """
             {
@@ -182,9 +184,9 @@ public sealed class ModelGraphTests
         var expanded = ModelGraph.Expand(["Accounting"], graph);
 
         Assert.Contains("Accounting", expanded);
-        Assert.Contains("Production", expanded);
         Assert.Contains("Common", expanded);
         Assert.Contains("Core", expanded);
+        Assert.DoesNotContain("Production", expanded);
     }
 
     [Fact]

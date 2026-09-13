@@ -94,6 +94,7 @@ public class ModelsController : ControllerBase
                     latest,
                     isSystem = node?.IsSystem ?? false,
                     dependsOn = node?.DependsOn ?? [],
+                    extends = node?.Extends ?? [],
                     versions = g
                         .GroupBy(x => x.m.Version, StringComparer.OrdinalIgnoreCase)
                         .OrderByDescending(v => v.Key, Comparer<string>.Create(ModelGraph.CompareVersions))
