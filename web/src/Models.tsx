@@ -442,7 +442,15 @@ function TenantModelsDetail({
 }) {
   const rows = tenant.installed.filter((m) => !m.isSystem);
   return (
-    <Stack gap="sm" p="sm" style={{ background: 'var(--mantine-color-gray-0)' }}>
+    <Stack
+      gap="sm"
+      p="sm"
+      style={{
+        // gray-0 is always near-white — a flash-bang on the dark panel.
+        // The canvas token is the recessed surface in both schemes.
+        background: 'var(--zo-canvas)',
+        borderTop: '1px solid var(--zo-hairline)',
+      }}>
       <Group gap="xs">
         {tenant.outdatedCount > 0 && (
           <Button size="xs" variant="light" color="yellow" onClick={() => onInstall(tenant)}>
