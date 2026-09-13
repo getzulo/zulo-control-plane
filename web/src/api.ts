@@ -3,6 +3,67 @@
  *  while developing against a separately-run backend. */
 const BASE = import.meta.env.VITE_API_BASE ?? '';
 
+export interface LogStoreStatus {
+  state: 'connected' | 'disconnected';
+  error?: string | null;
+  clusterSizeBytes?: number | null;
+  tenantCount: number;
+  missingDatabaseCount: number;
+}
+
+export interface LogTenantRow {
+  slug: string;
+  tenantId: string;
+  status: string;
+  databaseExists: boolean;
+  sizeBytes?: number | null;
+  documents?: number | null;
+  oldestUtc?: string | null;
+  newestUtc?: string | null;
+  ttlDays?: number | null;
+  sinkSilent: boolean;
+}
+
+export interface LogEventRow {
+  id: string;
+  slug: string;
+  timestamp: string;
+  level: string;
+  message: string;
+  messageTemplate?: string | null;
+  exception?: string | null;
+  sourceContext?: string | null;
+  application?: string | null;
+  userName?: string | null;
+  requestId?: string | null;
+  jobId?: string | null;
+  jobName?: string | null;
+  agentId?: string | null;
+  agentTag?: string | null;
+  channel: string;
+  properties: Record<string, string | null>;
+}
+
+export interface LogEventsResponse {
+  items: LogEventRow[];
+  take: number;
+}
+
+export interface LogEventQuery {
+  slug?: string;
+  fromUtc?: string;
+  toUtc?: string;
+  minLevel?: string;
+  sourceContains?: string;
+  channel?: string;
+  text?: string;
+  userName?: string;
+  requestId?: string;
+  jobId?: string;
+  agentId?: string;
+  take?: number;
+}
+
 export type TenantStatus = 'Provisioning' | 'Active' | 'Suspended' | 'Failed' | 'Deleting';
 export type TenantHealth = 'Unknown' | 'Ok' | 'Down';
 
@@ -379,6 +440,33 @@ export const api = {
   enrolConfirm: (email: string, password: string, secret: string, totp: string) =>
     request<{ enrolled: boolean }>(
       '/api/auth/enrol/confirm', { method: 'POST', body: JSON.stringify({ email, password, secret, totp }) }),
+
+  logStatus: () => request<LogStoreStatus>('/api/logs/status'),
+  logTenants: () => request<LogTenantRow[]>('/api/logs/tenants'),
+  logEvents: (q: LogEventQuery) => {
+    const p = new URLSearchParams();
+    if (q.slug) p.set('slug', q.slug);
+    if (q.fromUtc) p.set('fromUtc', q.fromUtc);
+    if (q.toUtc) p.set('toUtc', q.toUtc);
+    if (q.minLevel) p.set('minLevel', q.minLevel);
+    if (q.sourceContains) p.set('sourceContains', q.sourceContains);
+    if (q.channel) p.set('channel', q.channel);
+    if (q.text) p.set('text', q.text);
+    if (q.userName) p.set('userName', q.userName);
+    if (q.requestId) p.set('requestId', q.requestId);
+    if (q.jobId) p.set('jobId', q.jobId);
+    if (q.agentId) p.set('agentId', q.agentId);
+    p.set('take', String(q.take ?? 100));
+    return request<LogEventsResponse>(`/api/logs/events?${p}`);
+  },
+  purgeLogs: (slug: string, body: { olderThanDays?: number; all?: boolean; confirmSlug: string }) =>
+    request<{ ok: boolean }>(`/api/logs/${encodeURIComponent(slug)}/purge`, {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+  setLogTtl: (slug: string, days: number) =>
+    request<{ ok: boolean; days: number }>(`/api/logs/${encodeURIComponent(slug)}/ttl`, {
+      method: 'POST', body: JSON.stringify({ days }),
+    }),
 
   fleetHealth: () => request<FleetHealth>('/api/fleet/health'),
   listTenants: () => request<Tenant[]>('/api/tenants'),

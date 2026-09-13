@@ -7,7 +7,7 @@ import {
 import {
   IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
-import { api, type ImageTag, type Job, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
+import { api, type ImageTag, type Job, type LogTenantRow, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
 
 /**
@@ -37,6 +37,7 @@ export function TenantPage() {
   const [logs, setLogs] = useState('');
   const [stats, setStats] = useState<TenantStats | null>(null);
   const [models, setModels] = useState<TenantModels | null>(null);
+  const [journal, setJournal] = useState<LogTenantRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -84,6 +85,10 @@ export function TenantPage() {
       ]);
       setModels(m);
       setTenant(t); setJobs(j); setSnapshots(s.snapshots); setError(null);
+      try {
+        const fleet = await api.logTenants();
+        setJournal(fleet.find((r) => r.slug === t.slug) ?? null);
+      } catch { setJournal(null); }
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
   }, [id]);
@@ -261,6 +266,17 @@ export function TenantPage() {
                 </Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Container</Table.Td><Table.Td><Code>{tenant.containerId ?? '—'}</Code></Table.Td></Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Database</Table.Td><Table.Td><Code>{tenant.databaseName ?? '—'}</Code></Table.Td></Table.Tr>
+                <Table.Tr>
+                  <Table.Td c="dimmed">Journal</Table.Td>
+                  <Table.Td>
+                    <Anchor component={Link} to={`/logs?slug=${tenant.slug}`} size="sm">
+                      {journal?.databaseExists
+                        ? `${fmtBytes(journal.sizeBytes)} / ${journal.ttlDays ?? 14} days`
+                        : 'open log viewer'}
+                    </Anchor>
+                    {journal?.sinkSilent && <Badge size="xs" color="red" ml={6}>sink silent</Badge>}
+                  </Table.Td>
+                </Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Administrator</Table.Td><Table.Td>{tenant.adminEmail ?? '—'}</Table.Td></Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Created</Table.Td><Table.Td>{fmt(tenant.createdAt)}</Table.Td></Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Last probe</Table.Td><Table.Td>{fmt(tenant.lastHealthAt)}</Table.Td></Table.Tr>

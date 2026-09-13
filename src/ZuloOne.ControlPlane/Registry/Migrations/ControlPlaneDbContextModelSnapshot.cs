@@ -244,6 +244,18 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                     b.Property<DateTime?>("LastHealthAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("LogDatabase")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)");
+
+                    b.Property<string>("LogPassword")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("LogUser")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)");
+
                     b.Property<string>("Models")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");

@@ -86,6 +86,21 @@ public class Tenant
     [MaxLength(200)]
     public string? DatabasePassword { get; set; }
 
+    /// <summary>Mongo database holding this tenant's structured journal.</summary>
+    [MaxLength(63)]
+    public string? LogDatabase { get; set; }
+
+    /// <summary>Database-scoped Mongo user; it cannot read another tenant's journal.</summary>
+    [MaxLength(63)]
+    public string? LogUser { get; set; }
+
+    /// <summary>
+    /// Mongo password retained so container upgrades and restarts keep logging.
+    /// It shares the registry security boundary with <see cref="DatabasePassword"/>.
+    /// </summary>
+    [MaxLength(200)]
+    public string? LogPassword { get; set; }
+
     [MaxLength(200)]
     public string? JwtSigningKey { get; set; }
 

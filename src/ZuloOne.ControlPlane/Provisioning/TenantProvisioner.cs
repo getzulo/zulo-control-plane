@@ -24,6 +24,7 @@ public sealed class TenantProvisioner
 
     private readonly ControlPlaneDbContext _db;
     private readonly TenantDatabaseProvisioner _databases;
+    private readonly TenantLogDatabaseProvisioner _logDatabases;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
     private readonly TenantInviteService _invites;
@@ -33,6 +34,7 @@ public sealed class TenantProvisioner
     public TenantProvisioner(
         ControlPlaneDbContext db,
         TenantDatabaseProvisioner databases,
+        TenantLogDatabaseProvisioner logDatabases,
         TenantContainerService containers,
         TenantHealthProbe health,
         TenantInviteService invites,
@@ -41,6 +43,7 @@ public sealed class TenantProvisioner
     {
         _db = db;
         _databases = databases;
+        _logDatabases = logDatabases;
         _containers = containers;
         _health = health;
         _invites = invites;
@@ -116,6 +119,15 @@ public sealed class TenantProvisioner
             tenant.DatabaseRole = role;
             tenant.DatabasePassword = password;
             await SaveAsync(tenant, ct);
+
+            var logDatabase = await _logDatabases.CreateAsync(slug, ct);
+            if (logDatabase is not null)
+            {
+                tenant.LogDatabase = logDatabase.Database;
+                tenant.LogUser = logDatabase.User;
+                tenant.LogPassword = logDatabase.Password;
+                await SaveAsync(tenant, ct);
+            }
 
             if (job is not null) await job.StepAsync("Starting the container", 25, ct);
             tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
@@ -200,6 +212,7 @@ public sealed class TenantProvisioner
         // Only HERE, never on a recreate: the ring is what makes the tenant's stored
         // secrets readable, and it must outlive every upgrade.
         await _containers.RemoveVolumeAsync(tenant.Slug, ct);
+        await _logDatabases.DropAsync(tenant.LogDatabase, tenant.LogUser, ct);
         await _databases.DropAsync(tenant.DatabaseName, tenant.DatabaseRole, ct);
 
         _db.Tenants.Remove(tenant);
@@ -213,12 +226,16 @@ public sealed class TenantProvisioner
         {
             if (!string.IsNullOrWhiteSpace(tenant.ContainerId))
                 await _containers.RemoveAsync(tenant.ContainerId!, ct);
+            await _logDatabases.DropAsync(tenant.LogDatabase, tenant.LogUser, ct);
             await _databases.DropAsync(tenant.DatabaseName, tenant.DatabaseRole, ct);
 
             tenant.ContainerId = null;
             tenant.DatabaseName = null;
             tenant.DatabaseRole = null;
             tenant.DatabasePassword = null;
+            tenant.LogDatabase = null;
+            tenant.LogUser = null;
+            tenant.LogPassword = null;
             await SaveAsync(tenant, ct);
         }
         catch (Exception ex)

@@ -18,12 +18,18 @@ public sealed class TenantContainerService
 {
     private readonly IDockerClient _docker;
     private readonly FleetConfig _fleet;
+    private readonly TenantLogDatabaseProvisioner _logDatabases;
     private readonly ILogger<TenantContainerService> _logger;
 
-    public TenantContainerService(IDockerClient docker, FleetConfig fleet, ILogger<TenantContainerService> logger)
+    public TenantContainerService(
+        IDockerClient docker,
+        FleetConfig fleet,
+        TenantLogDatabaseProvisioner logDatabases,
+        ILogger<TenantContainerService> logger)
     {
         _docker = docker;
         _fleet = fleet;
+        _logDatabases = logDatabases;
         _logger = logger;
     }
 
@@ -129,6 +135,17 @@ public sealed class TenantContainerService
             // because it shipped in the same file.
             $"ZuloOne__Packages__Install={ModelsFor(tenant)}",
         };
+
+        if (_logDatabases.IsConfigured
+            && !string.IsNullOrWhiteSpace(tenant.LogDatabase)
+            && !string.IsNullOrWhiteSpace(tenant.LogUser)
+            && !string.IsNullOrWhiteSpace(tenant.LogPassword))
+        {
+            env.Add($"ZuloOne__TenantSlug={tenant.Slug}");
+            env.Add(
+                $"Logging__Mongo__Url={_logDatabases.TenantConnectionUrl(tenant.LogDatabase, tenant.LogUser, tenant.LogPassword)}");
+            env.Add($"Logging__Mongo__Database={tenant.LogDatabase}");
+        }
 
         // Remove a stale container of the same name first — provisioning must be
         // retryable after a failure, not blocked by its own leftovers.

@@ -37,6 +37,7 @@ public sealed class RestoreJobHandler : IJobHandler
 
     private readonly ControlPlaneDbContext _db;
     private readonly TenantDatabaseProvisioner _databases;
+    private readonly TenantLogDatabaseProvisioner _logDatabases;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
     private readonly PgTools _pg;
@@ -46,6 +47,7 @@ public sealed class RestoreJobHandler : IJobHandler
     public RestoreJobHandler(
         ControlPlaneDbContext db,
         TenantDatabaseProvisioner databases,
+        TenantLogDatabaseProvisioner logDatabases,
         TenantContainerService containers,
         TenantHealthProbe health,
         PgTools pg,
@@ -54,6 +56,7 @@ public sealed class RestoreJobHandler : IJobHandler
     {
         _db = db;
         _databases = databases;
+        _logDatabases = logDatabases;
         _containers = containers;
         _health = health;
         _pg = pg;
@@ -124,6 +127,15 @@ public sealed class RestoreJobHandler : IJobHandler
             tenant.DatabasePassword = password;
             await _db.SaveChangesAsync(ct);
 
+            var logDatabase = await _logDatabases.CreateAsync(slug, ct);
+            if (logDatabase is not null)
+            {
+                tenant.LogDatabase = logDatabase.Database;
+                tenant.LogUser = logDatabase.User;
+                tenant.LogPassword = logDatabase.Password;
+                await _db.SaveChangesAsync(ct);
+            }
+
             await context.StepAsync($"Loading {snapshot.SizeBytes / 1024} KB into {database}", 30, ct);
             // As the NEW role, so every restored object is owned by it from the
             // start. Loading as the admin role would leave the tenant unable to
@@ -167,6 +179,7 @@ public sealed class RestoreJobHandler : IJobHandler
             {
                 if (!string.IsNullOrWhiteSpace(tenant.ContainerId))
                     await _containers.RemoveAsync(tenant.ContainerId!, CancellationToken.None);
+                await _logDatabases.DropAsync(tenant.LogDatabase, tenant.LogUser, CancellationToken.None);
                 await _databases.DropAsync(tenant.DatabaseName, tenant.DatabaseRole, CancellationToken.None);
                 _db.Tenants.Remove(tenant);
                 await _db.SaveChangesAsync(CancellationToken.None);

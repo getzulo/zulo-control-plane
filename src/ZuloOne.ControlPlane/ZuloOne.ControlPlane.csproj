@@ -9,6 +9,9 @@
   <ItemGroup>
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="MailKit" Version="4.17.0" />
+    <!-- Farm journal (per-tenant logs_* databases). Transitive SharpCompress/Snappier
+         advisories are the driver's; we do not use those APIs. -->
+    <PackageReference Include="MongoDB.Driver" Version="3.5.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <!-- Validates the Cloudflare Access assertion. Also brings the OpenID Connect
          configuration manager, which is what keeps the panel reachable when

@@ -27,6 +27,7 @@ public sealed class SwapJobHandler : IJobHandler
 {
     private readonly ControlPlaneDbContext _db;
     private readonly TenantDatabaseProvisioner _databases;
+    private readonly TenantLogDatabaseProvisioner _logDatabases;
     private readonly TenantContainerService _containers;
     private readonly TenantHealthProbe _health;
     private readonly FleetConfig _fleet;
@@ -34,12 +35,14 @@ public sealed class SwapJobHandler : IJobHandler
     public SwapJobHandler(
         ControlPlaneDbContext db,
         TenantDatabaseProvisioner databases,
+        TenantLogDatabaseProvisioner logDatabases,
         TenantContainerService containers,
         TenantHealthProbe health,
         FleetConfig fleet)
     {
         _db = db;
         _databases = databases;
+        _logDatabases = logDatabases;
         _containers = containers;
         _health = health;
         _fleet = fleet;
@@ -135,6 +138,7 @@ public sealed class SwapJobHandler : IJobHandler
         {
             if (!string.IsNullOrWhiteSpace(scratch.ContainerId))
                 await _containers.RemoveAsync(scratch.ContainerId!, ct);
+            await _logDatabases.DropAsync(scratch.LogDatabase, scratch.LogUser, ct);
             await _databases.DropAsync(null, scratch.DatabaseRole, ct);
             _db.Tenants.Remove(scratch);
             await _db.SaveChangesAsync(ct);

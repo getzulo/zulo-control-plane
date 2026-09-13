@@ -65,6 +65,9 @@ builder.Services.Configure<FleetSettings>(builder.Configuration.GetSection("Flee
 // it holds no state of its own — both of its sources are singletons.
 builder.Services.AddSingleton<FleetConfig>();
 builder.Services.Configure<TenantDatabaseSettings>(builder.Configuration.GetSection("TenantDatabase"));
+builder.Services.Configure<TenantLogSettings>(builder.Configuration.GetSection("TenantLogs"));
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<TenantLogStore>();
 builder.Services.Configure<ControlPlaneMailSettings>(builder.Configuration.GetSection("Mail"));
 builder.Services.Configure<PatroniSettings>(builder.Configuration.GetSection("Patroni"));
 
@@ -88,6 +91,7 @@ builder.Services.AddSingleton<IDockerClient>(_ =>
 builder.Services.AddHttpClient("tenant", client => client.Timeout = TimeSpan.FromSeconds(15));
 
 builder.Services.AddScoped<TenantDatabaseProvisioner>();
+builder.Services.AddScoped<TenantLogDatabaseProvisioner>();
 builder.Services.AddScoped<TenantContainerService>();
 builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantStatsService>();

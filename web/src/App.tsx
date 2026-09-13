@@ -6,7 +6,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconMoon,
-  IconPackage, IconPackages, IconServer2, IconSettings, IconSun,
+  IconNotes, IconPackage, IconPackages, IconServer2, IconSettings, IconSun,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp } from './shared';
@@ -18,11 +18,13 @@ import { SnapshotsPage } from './Snapshots';
 import { ImagesPage } from './Images';
 import { ModelsPage } from './Models';
 import { SettingsPage } from './Settings';
+import { LogsPage } from './Logs';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: IconLayoutDashboard, end: true },
   { to: '/tenants', label: 'Tenants', icon: IconCloudComputing, end: false },
   { to: '/infrastructure', label: 'Infrastructure', icon: IconServer2, end: false },
+  { to: '/logs', label: 'Logs', icon: IconNotes, end: false },
   { to: '/backups', label: 'Backups', icon: IconDatabaseExport, end: false },
   { to: '/images', label: 'Images', icon: IconPackages, end: false },
   { to: '/models', label: 'Models', icon: IconPackage, end: false },
@@ -118,6 +120,7 @@ export default function App() {  const auth = useAuth();
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/tenants/:id" element={<TenantPage />} />
           <Route path="/infrastructure" element={<InfrastructurePage />} />
+          <Route path="/logs" element={<LogsPage />} />
           <Route path="/backups" element={<SnapshotsPage />} />
           <Route path="/images" element={<ImagesPage />} />
           <Route path="/models" element={<ModelsPage />} />
