@@ -100,9 +100,21 @@ public sealed class InstallModelsJobHandler : IJobHandler
 
         if (!result.Succeeded)
         {
+            // Import can commit and still answer 500 (persist onto a read-only
+            // image path). Metadata is then in the tenant with no new columns —
+            // AccountingPostingTest died on "column parentid does not exist" after
+            // exactly that. Materialize is the same job as Compile: schema, types,
+            // scripts. It cannot undo a half-import, but it can make one runnable.
+            await context.StepAsync("Install reported failure — materializing what landed", 70, ct);
+            var materialize = await _tenants.MaterializeAsync(
+                tenant, TimeSpan.FromSeconds(Math.Max(_fleet.ReadinessTimeoutSeconds, 300)), ct);
+            var materializeNote = materialize.Succeeded
+                ? "Schema sync and compile still ran against whatever metadata was already in the database."
+                : $"Materialize also failed: {string.Join(" | ", materialize.Errors.Take(3))}.";
             throw new InvalidOperationException(
                 $"{tenant.Slug} did not install the models: {string.Join(" | ", result.Errors.Take(5))}. "
-                + $"The tenant is still running what it had; snapshot {snapshot.FileName} predates the attempt.");
+                + materializeNote
+                + $" Snapshot {snapshot.FileName} predates the attempt.");
         }
 
         await context.LogAsync($"Installed: {result.Created} created, {result.Updated} updated.", ct);
