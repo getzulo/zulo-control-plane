@@ -372,11 +372,11 @@ export function ModelsPage() {
                       <Text size="xs" c="dimmed">{m.latest}</Text>
                       {row?.outdated && <Badge size="xs" color="yellow">outdated {row.version ?? '?'}</Badge>}
                       {!onTenant && <Badge size="xs" color="gray">not installed</Badge>}
-                      {requiredBy.length > 0 && (
-                        <Text size="xs" c="dimmed">needed by {requiredBy.join(', ')}</Text>
+                      {m.dependsOn.length > 0 && (
+                        <Text size="xs" c="dimmed">depends on {m.dependsOn.join(', ')}</Text>
                       )}
-                      {m.dependsOn.length > 0 && checked && (
-                        <Text size="xs" c="dimmed">+ {m.dependsOn.join(', ')}</Text>
+                      {requiredBy.length > 0 && (
+                        <Text size="xs" c="dimmed">locked — {requiredBy.join(', ')} need this</Text>
                       )}
                     </Group>
                   }
