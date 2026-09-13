@@ -4,7 +4,7 @@ import {
   Alert, Anchor, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Tabs, Text, TextInput, Title,
   Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowUp, IconRocket, IconTrash } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowUp, IconEraser, IconRocket, IconTrash } from '@tabler/icons-react';
 import { api, type ImageTag, type Images, type Tenant } from './api';
 import { JobProgress, useJob, usePoll } from './shared';
 
@@ -16,6 +16,8 @@ export function ImagesPage() {
   const [upgrade, setUpgrade] = useState<{ tag: ImageTag; tenant: Tenant } | null>(null);
   const [pick, setPick] = useState<ImageTag | null>(null);
   const [remove, setRemove] = useState<ImageTag | null>(null);
+  const [pruneUnused, setPruneUnused] = useState(false);
+  const [pruning, setPruning] = useState(false);
   const [promote, setPromote] = useState<ImageTag | null>(null);
   // Its OWN state. `confirm` is shared by the delete and upgrade dialogs, and
   // reusing it here would put a leftover tenant slug in the version box.
@@ -41,6 +43,8 @@ export function ImagesPage() {
   // older than what the fleet runs means the newest customer gets the oldest code.
   const newest = images?.releases[0];
   const defaultIsStale = Boolean(newest && images?.defaultImage && newest.image !== images.defaultImage);
+  const unused = [...(images?.releases ?? []), ...(images?.builds ?? [])].filter((t) => t.canDelete);
+  const keepUnused = images?.keepUnusedReleases ?? 3;
 
   const rows = (list: ImageTag[], isRelease: boolean) => list.map((t) => (
     <Table.Tr key={t.tag}>
@@ -120,8 +124,9 @@ export function ImagesPage() {
           assembly, so an image promoted to <Code>2026.9.5</Code> still reports its build number from{' '}
           <Code>/health</Code> — that is not a fault, it is the same image, and this screen is where the
           two names are reconciled. And because both names point at one manifest, they cannot be
-          separated: deleting either removes it from under both, which is why Delete refuses whenever any
-          name on a manifest is a release, is the fleet default, or is what a tenant runs.
+          separated: deleting either removes it from under both. Delete refuses when any name on a
+          manifest is what a tenant runs, is the fleet default, or is one of the newest unused
+          releases (the rollback window). Older unused releases and leftover CI builds can go.
         </Text>
       </Card>
 
@@ -146,6 +151,20 @@ export function ImagesPage() {
             <Button size="xs" variant="subtle" mt={6} onClick={() => { setJobId(null); void refresh(); }}>Dismiss</Button>
           )}
         </Card>
+      )}
+
+      {unused.length > 0 && (
+        <Group>
+          <Button
+            size="xs" variant="light" color="red" leftSection={<IconEraser size={14} />}
+            onClick={() => { setPruneUnused(true); setConfirm(''); }}
+          >
+            Prune unused ({unused.length})
+          </Button>
+          <Text size="xs" c="dimmed">
+            Leaves tenants, the default, and the newest {keepUnused} unused release{keepUnused === 1 ? '' : 's'}.
+          </Text>
+        </Group>
       )}
 
       <Card withBorder padding={0}>
@@ -216,6 +235,39 @@ export function ImagesPage() {
               }}
             >
               Snapshot and upgrade
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal opened={pruneUnused} onClose={() => setPruneUnused(false)} title="Prune unused images">
+        <Stack gap="sm">
+          <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+            Removes {unused.length} unused image{unused.length === 1 ? '' : 's'} from the registry.
+            Tenants, the fleet default, and the newest {keepUnused} unused release{keepUnused === 1 ? '' : 's'} stay.
+          </Alert>
+          <Text size="xs" c="dimmed">
+            Disk is not freed by this. Manifests go immediately; layers survive until{' '}
+            <Code>registry garbage-collect</Code> on the registry host.
+          </Text>
+          <TextInput
+            label='Type "prune" to confirm' value={confirm}
+            onChange={(e) => setConfirm(e.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPruneUnused(false)}>Cancel</Button>
+            <Button color="red" disabled={confirm !== 'prune'} loading={pruning}
+              onClick={async () => {
+                setPruning(true);
+                try {
+                  const r = await api.pruneUnusedImages();
+                  setPruneUnused(false);
+                  setReleased(`Removed ${r.removed.length} tag${r.removed.length === 1 ? '' : 's'} from the registry.`);
+                  await refresh();
+                } catch (e) { setError((e as Error).message); }
+                finally { setPruning(false); }
+              }}
+            >
+              Prune them
             </Button>
           </Group>
         </Stack>

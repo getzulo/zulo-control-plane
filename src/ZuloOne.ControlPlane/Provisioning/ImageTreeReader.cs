@@ -59,8 +59,9 @@ public sealed class ImageTreeReader
     }
 
     /// <summary>
-    /// Names, versions and dependencies from the image's workspace. Cached per
-    /// image tag — the layer does not change under a pinned tag.
+    /// Names, versions and dependencies from the image's workspace, including
+    /// implicit edges from extension files. Cached per image tag — the layer
+    /// does not change under a pinned tag.
     /// </summary>
     public async Task<IReadOnlyList<ModelGraphNode>> ReadGraphAsync(
         string image, CancellationToken ct = default)
@@ -162,11 +163,7 @@ public sealed class ImageTreeReader
                 var name = entry.Name.TrimStart('.', '/');
                 if (!name.StartsWith(TreeRoot, StringComparison.Ordinal)) continue;
                 var relative = name[TreeRoot.Length..];
-                if (!relative.EndsWith("/model.json", StringComparison.OrdinalIgnoreCase)
-                    && !relative.Equals("model.json", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+                if (!IsGraphSource(relative)) continue;
                 using var buffer = new MemoryStream();
                 await entry.DataStream.CopyToAsync(buffer, ct);
                 files.Add((relative, Encoding.UTF8.GetString(buffer.ToArray())));
@@ -293,6 +290,16 @@ public sealed class ImageTreeReader
             return null;
         }
     }
+
+    /// <summary>
+    /// Files the graph needs: each model's declaration, plus the objects and
+    /// extensions that imply a dependency the <c>model.json</c> forgot to list.
+    /// </summary>
+    private static bool IsGraphSource(string relative) =>
+        relative.EndsWith("/model.json", StringComparison.OrdinalIgnoreCase)
+        || relative.Equals("model.json", StringComparison.OrdinalIgnoreCase)
+        || relative.EndsWith(".extension.json", StringComparison.OrdinalIgnoreCase)
+        || relative.EndsWith(".object.json", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<JsonDocument?> GetManifestAsync(
         HttpClient client, string registry, string repository, string reference, CancellationToken ct)

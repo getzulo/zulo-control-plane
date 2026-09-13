@@ -169,10 +169,10 @@ public sealed class PruneJobHandler : IJobHandler
     /// </para>
     ///
     /// <para>
-    /// Falling outside the window is not a dead end either. The registry keeps
-    /// every release precisely so it is not — <c>ImagesController.WhyUndeletable</c>
-    /// refuses to delete one — and it is on the LAN, so rolling back past the window
-    /// costs a pull rather than being impossible.
+        /// Falling outside the window is not a dead end either. The registry keeps
+        /// the newest unused releases (<c>Images:KeepUnusedReleases</c>) so a pull
+        /// can still reach a recent rollback target. Older unused releases can be
+        /// removed from the Images screen.
     /// </para>
     /// </remarks>
     private async Task<(int Removed, long Bytes)> SweepImagesAsync(JobContext context, CancellationToken ct)

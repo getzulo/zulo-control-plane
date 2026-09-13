@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 namespace ZuloOne.ControlPlane.Infra;
 
 /// <summary>
-/// The last self-report from a database node.
+/// The last self-report from a fleet node (Postgres, Mongo, app, etcd, panel, CI).
 ///
 /// <para>
 /// Patroni's REST API answers the questions it owns — who leads, who streams, how
@@ -25,10 +25,21 @@ namespace ZuloOne.ControlPlane.Infra;
 /// </summary>
 public class NodeHealth
 {
-    /// <summary>Hostname as the node knows itself, e.g. <c>zo-pg-2</c>.</summary>
+    /// <summary>
+    /// Logical name the report arrived under, e.g. <c>zo-pg-2</c> or <c>mongo</c>.
+    /// Not always a hostname: Mongo lives on the app host but reports as its own name.
+    /// </summary>
     [Key]
     [MaxLength(64)]
     public string Node { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What this name is for: <c>postgres</c>, <c>mongo</c>, <c>app</c>, <c>etcd</c>,
+    /// <c>panel</c>, <c>ci</c>. Empty on rows written before roles existed — the
+    /// panel then infers from the name.
+    /// </summary>
+    [MaxLength(16)]
+    public string Role { get; set; } = string.Empty;
 
     /// <summary><c>healthy</c>, <c>degraded</c> or <c>broken</c> — the script's own verdict.</summary>
     [MaxLength(16)]

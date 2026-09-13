@@ -126,6 +126,7 @@ builder.Services.AddHostedService<JobWorker>();
 // they inherit the one-at-a-time execution that keeps a delete away from a dump
 // being written or a restore reading one.
 builder.Services.AddHostedService<PruneScheduler>();
+builder.Services.AddHostedService<ZuloOne.ControlPlane.Infra.PanelHeartbeat>();
 
 // The image registry is plain HTTP on the LAN and answers instantly or not at all.
 builder.Services.AddHttpClient("registry", client => client.Timeout = TimeSpan.FromSeconds(8));

@@ -182,13 +182,31 @@ export interface ClusterMember {
   selfCheckReport?: string | null;
 }
 
+/** A fleet host: Patroni member, a reporter, or a name we were told to expect. */
+export interface InfraNode {
+  name: string;
+  role: string;
+  selfCheck: string;
+  selfCheckAt?: string | null;
+  selfCheckAgeSeconds?: number | null;
+  selfCheckReport?: string | null;
+  patroniRole?: string | null;
+  state?: string | null;
+  host?: string | null;
+  port?: number | null;
+  timeline?: number | null;
+  lag?: number | null;
+  lsn?: string | null;
+}
+
 export interface Cluster {
   configured: boolean;
   /** False when no node answered — distinct from an empty member list. */
   reachable: boolean;
   scope?: string | null;
   members: ClusterMember[];
-  unmatchedReports: { node: string; status: string; receivedAt: string; report?: string | null }[];
+  nodes: InfraNode[];
+  unmatchedReports: { node: string; status: string; receivedAt: string; report?: string | null; role?: string }[];
   /** The CLUSTER's pgBackRest inventory, as distinct from per-tenant dumps. */
   backups?: ClusterBackups | null;
 }
@@ -362,6 +380,8 @@ export interface Images {
   registry?: string | null;
   repository?: string;
   defaultImage?: string;
+  /** Newest unused releases the prune leaves alone (Images:KeepUnusedReleases). */
+  keepUnusedReleases?: number;
   releases: ImageTag[];
   builds: ImageTag[];
   error?: string;
@@ -614,11 +634,15 @@ export const api = {
 
   /**
    * Removes the MANIFEST, so every tag on it goes. The API refuses when any of
-   * those names is in use, is a release, or is the fleet default.
+   * those names is in use, is the fleet default, or is in the unused-release window.
    */
   removeImage: (tag: string) =>
     request<{ success: boolean; digest: string; removed: string[]; note: string }>(
       `/api/images/${encodeURIComponent(tag)}?confirmTag=${encodeURIComponent(tag)}`, { method: 'DELETE' }),
+
+  /** Delete every unused manifest the single-delete guards would allow. */
+  pruneUnusedImages: () =>
+    request<{ success: boolean; removed: string[]; note: string }>('/api/images/prune-unused', { method: 'POST' }),
 
   /** Apply the retention policy now rather than at the next scheduled sweep. */
   prune: () => request<{ jobId: string }>('/api/snapshots/prune', { method: 'POST' }),

@@ -24,7 +24,7 @@ public class ControlPlaneDbContext : DbContext
     /// <summary>Every long-running operation the panel has performed, and its outcome.</summary>
     public DbSet<Job> Jobs => Set<Job>();
 
-    /// <summary>Each database node's last self-check, keyed by hostname.</summary>
+    /// <summary>Each fleet node's last self-check, keyed by the name it reported as.</summary>
     public DbSet<NodeHealth> NodeHealth => Set<NodeHealth>();
 
     /// <summary>Logical dumps held on the control plane's disk.</summary>

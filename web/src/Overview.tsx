@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Alert, Anchor, Badge, Card, Grid, Group, Loader, Progress, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { IconAlertTriangle, IconDatabase, IconServer } from '@tabler/icons-react';
 import { api, type Cluster, type FleetHealth, type Job, type Snapshot } from './api';
-import { CHECK_COLOR, JOB_COLOR, ago, fmt, fmtBytes, usePoll } from './shared';
+import { CHECK_COLOR, JOB_COLOR, ROLE_COLOR, ROLE_LABEL, ago, fmt, fmtBytes, usePoll } from './shared';
 
 function Stat({ label, value, color, hint }: { label: string; value: string | number; color?: string; hint?: string }) {
   return (
@@ -43,7 +43,10 @@ export function OverviewPage() {
   const running = jobs.filter((j) => j.state === 'Running' || j.state === 'Queued');
   const failedJobs = jobs.filter((j) => j.state === 'Failed').slice(0, 3);
   const newest = snapshots[0];
-  const badNodes = (cluster?.members ?? []).filter((m) => m.selfCheck !== 'healthy');
+  const fleetNodes = cluster?.nodes ?? cluster?.members.map((m) => ({
+    ...m, role: 'postgres', patroniRole: m.role,
+  })) ?? [];
+  const badNodes = fleetNodes.filter((m) => m.selfCheck !== 'healthy');
   const copies = (fleet?.tenants ?? []).filter((t) => t.restoredFromSlug);
 
   return (
@@ -73,7 +76,8 @@ export function OverviewPage() {
         <Alert color={badNodes.some((n) => n.selfCheck === 'broken') ? 'red' : 'orange'} icon={<IconAlertTriangle size={16} />}>
           {badNodes.map((n) => (
             <Text key={n.name} size="sm">
-              <b>{n.name}</b>: {n.selfCheck === 'stale'
+              <b>{n.name}</b>
+              {'role' in n && n.role ? ` (${ROLE_LABEL[n.role] ?? n.role})` : ''}: {n.selfCheck === 'stale'
                 ? `last reported ${ago(n.selfCheckAgeSeconds)} — it publishes every 5 minutes, so it or the machine stopped`
                 : n.selfCheck === 'never' ? 'has never reported' : `self-check says ${n.selfCheck}`}
             </Text>
@@ -122,19 +126,19 @@ export function OverviewPage() {
         <Grid.Col span={{ base: 12, md: 5 }}>
           <Card withBorder padding="md" h="100%">
             <Group justify="space-between" mb="xs">
-              <Text fw={600}>Cluster</Text>
+              <Text fw={600}>Infrastructure</Text>
               <Anchor component={Link} to="/infrastructure" size="xs">Details →</Anchor>
             </Group>
-            {!cluster?.reachable ? (
-              <Group gap="xs"><IconAlertTriangle size={16} color="red" /><Text size="sm" c="red">No node answered</Text></Group>
+            {fleetNodes.length === 0 ? (
+              <Group gap="xs"><IconAlertTriangle size={16} color="red" /><Text size="sm" c="red">Nothing has reported</Text></Group>
             ) : (
               <Stack gap="xs">
-                {cluster.members.map((m) => (
-                  <Group key={m.name} justify="space-between">
+                {fleetNodes.map((m) => (
+                  <Group key={`${m.role}:${m.name}`} justify="space-between">
                     <Group gap={6}>
-                      {m.role.toLowerCase() === 'leader' ? <IconServer size={14} /> : <IconDatabase size={14} />}
+                      {(m.patroniRole ?? '').toLowerCase() === 'leader' ? <IconServer size={14} /> : <IconDatabase size={14} />}
                       <Text size="sm">{m.name}</Text>
-                      <Badge size="xs" variant="light" color={m.role.toLowerCase() === 'leader' ? 'grape' : 'blue'}>{m.role}</Badge>
+                      <Badge size="xs" variant="light" color={ROLE_COLOR[m.role] ?? 'gray'}>{ROLE_LABEL[m.role] ?? m.role}</Badge>
                     </Group>
                     <Badge size="xs" variant="light" color={CHECK_COLOR[m.selfCheck] ?? 'gray'}>{m.selfCheck}</Badge>
                   </Group>

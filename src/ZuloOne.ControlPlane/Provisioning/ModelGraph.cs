@@ -49,57 +49,100 @@ public static class ModelGraph
     }
 
     /// <summary>
-    /// Reads every top-level <c>model.json</c> from a workspace tree.
-    /// Dependencies are resolved by <c>metaId</c>, then by the
-    /// <c>Name-&gt;DependsOn</c> convention the files already carry.
+    /// Reads a workspace tree into named nodes. Declared dependencies come from
+    /// <c>model.json</c> (<c>metaId</c>, then the <c>Name-&gt;DependsOn</c>
+    /// convention). Extension files add an implicit edge to the target's owner:
+    /// Accounting does not list Production, but it ships
+    /// <c>BillOfMaterials.Accounting</c>, and installing one without the other
+    /// fails the tenant's Extensions phase on a missing FK.
     /// </summary>
     public static List<ModelGraphNode> Parse(IEnumerable<(string Path, string Json)> files)
     {
         var raw = new List<(string Name, string Version, bool IsSystem, string MetaId, List<string> DepIds, List<string> DepNames)>();
         var byId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var objectOwner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var extensionEdges = new List<(string ExtendingModelId, string TargetObjectId)>();
 
         foreach (var (path, json) in files)
         {
-            if (!IsTopLevelModelJson(path)) continue;
             try
             {
                 using var doc = JsonDocument.Parse(json);
                 if (!doc.RootElement.TryGetProperty("object", out var obj)) continue;
-                var name = obj.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                var version = obj.TryGetProperty("modelVersion", out var v) ? v.GetString() ?? "" : "";
-                var isSystem = obj.TryGetProperty("isSystem", out var sys) && sys.ValueKind == JsonValueKind.True;
-                var metaId = obj.TryGetProperty("metaId", out var id) ? id.GetString() ?? "" : "";
-                if (metaId.Length > 0) byId[metaId] = name;
 
-                var depIds = new List<string>();
-                var depNames = new List<string>();
-                if (doc.RootElement.TryGetProperty("dependencies", out var deps)
-                    && deps.ValueKind == JsonValueKind.Array)
+                if (IsTopLevelModelJson(path))
                 {
-                    foreach (var dep in deps.EnumerateArray())
+                    var name = obj.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    var version = obj.TryGetProperty("modelVersion", out var v) ? v.GetString() ?? "" : "";
+                    var isSystem = obj.TryGetProperty("isSystem", out var sys) && sys.ValueKind == JsonValueKind.True;
+                    var metaId = obj.TryGetProperty("metaId", out var id) ? id.GetString() ?? "" : "";
+                    if (metaId.Length > 0) byId[metaId] = name;
+
+                    var depIds = new List<string>();
+                    var depNames = new List<string>();
+                    if (doc.RootElement.TryGetProperty("dependencies", out var deps)
+                        && deps.ValueKind == JsonValueKind.Array)
                     {
-                        if (dep.TryGetProperty("dependsOnModelMetaId", out var did))
+                        foreach (var dep in deps.EnumerateArray())
                         {
-                            var value = did.GetString();
-                            if (!string.IsNullOrWhiteSpace(value)) depIds.Add(value);
-                        }
-                        if (dep.TryGetProperty("name", out var dn))
-                        {
-                            var label = dn.GetString() ?? "";
-                            var arrow = label.LastIndexOf("->", StringComparison.Ordinal);
-                            if (arrow >= 0 && arrow + 2 < label.Length)
-                                depNames.Add(label[(arrow + 2)..]);
+                            if (dep.TryGetProperty("dependsOnModelMetaId", out var did))
+                            {
+                                var value = did.GetString();
+                                if (!string.IsNullOrWhiteSpace(value)) depIds.Add(value);
+                            }
+                            if (dep.TryGetProperty("name", out var dn))
+                            {
+                                var label = dn.GetString() ?? "";
+                                var arrow = label.LastIndexOf("->", StringComparison.Ordinal);
+                                if (arrow >= 0 && arrow + 2 < label.Length)
+                                    depNames.Add(label[(arrow + 2)..]);
+                            }
                         }
                     }
+
+                    raw.Add((name, version, isSystem, metaId, depIds, depNames));
+                    continue;
                 }
 
-                raw.Add((name, version, isSystem, metaId, depIds, depNames));
+                var kind = doc.RootElement.TryGetProperty("kind", out var k) ? k.GetString() : null;
+                if (kind is "Dictionary" or "Document")
+                {
+                    var metaId = ReadId(obj, "metaId");
+                    var modelId = ReadId(obj, "modelId");
+                    if (metaId.Length > 0 && modelId.Length > 0) objectOwner[metaId] = modelId;
+                }
+                else if (kind == "DictionaryExtension")
+                {
+                    var modelId = ReadId(obj, "modelId");
+                    var target = ReadId(obj, "targetDictionaryMetaId");
+                    if (modelId.Length > 0 && target.Length > 0)
+                        extensionEdges.Add((modelId, target));
+                }
+                else if (kind == "DocumentExtension")
+                {
+                    var modelId = ReadId(obj, "modelId");
+                    var target = ReadId(obj, "targetDocumentTypeMetaId");
+                    if (modelId.Length > 0 && target.Length > 0)
+                        extensionEdges.Add((modelId, target));
+                }
             }
             catch (JsonException)
             {
                 // One broken file must not blank the graph.
             }
+        }
+
+        var extraDeps = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (extendingModelId, targetObjectId) in extensionEdges)
+        {
+            if (!byId.TryGetValue(extendingModelId, out var extending)) continue;
+            if (!objectOwner.TryGetValue(targetObjectId, out var targetModelId)) continue;
+            if (!byId.TryGetValue(targetModelId, out var target)) continue;
+            if (extending.Equals(target, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!extraDeps.TryGetValue(extending, out var set))
+                extraDeps[extending] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(target);
         }
 
         return raw.Select(r =>
@@ -110,6 +153,10 @@ public static class ModelGraph
                 if (byId.TryGetValue(id, out var name)) depends.Add(name);
             }
             foreach (var name in r.DepNames) depends.Add(name);
+            if (extraDeps.TryGetValue(r.Name, out var extra))
+            {
+                foreach (var name in extra) depends.Add(name);
+            }
             depends.Remove(r.Name);
             return new ModelGraphNode(r.Name, r.Version, r.IsSystem, depends.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList());
         }).ToList();
@@ -137,6 +184,9 @@ public static class ModelGraph
         string.IsNullOrWhiteSpace(status)
         || status.Equals("Ok", StringComparison.OrdinalIgnoreCase)
         || status.Equals("Success", StringComparison.OrdinalIgnoreCase);
+
+    private static string ReadId(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var value) ? value.GetString() ?? "" : "";
 
     private static bool IsTopLevelModelJson(string path)
     {

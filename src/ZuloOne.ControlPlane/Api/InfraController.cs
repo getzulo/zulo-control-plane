@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Registry;
+using ZuloOne.ControlPlane.Settings;
 
 using ZuloOne.ControlPlane.Auth;
 
@@ -28,7 +29,8 @@ namespace ZuloOne.ControlPlane.Api;
 /// </param>
 public record NodeReportRequest(
     string Node, string Status, string? Report, DateTimeOffset? CheckedAt,
-    System.Text.Json.JsonElement? Backups);
+    System.Text.Json.JsonElement? Backups,
+    string? Role);
 
 /// <summary>Which node should take the leader role.</summary>
 public record SwitchoverRequest(string Candidate, string ConfirmNode);
@@ -45,15 +47,17 @@ public class InfraController : ControllerBase
     private readonly ControlPlaneDbContext _db;
     private readonly PatroniClient _patroni;
     private readonly PatroniSettings _settings;
+    private readonly SettingsStore _store;
     private readonly ILogger<InfraController> _logger;
 
     public InfraController(
         ControlPlaneDbContext db, PatroniClient patroni,
-        IOptions<PatroniSettings> settings, ILogger<InfraController> logger)
+        IOptions<PatroniSettings> settings, SettingsStore store, ILogger<InfraController> logger)
     {
         _db = db;
         _patroni = patroni;
         _settings = settings.Value;
+        _store = store;
         _logger = logger;
     }
 
@@ -68,6 +72,33 @@ public class InfraController : ControllerBase
         var reports = await _db.NodeHealth.AsNoTracking().ToListAsync(ct);
         var stale = TimeSpan.FromMinutes(Math.Max(1, _settings.ReportStaleAfterMinutes));
         var now = DateTime.UtcNow;
+        var expected = InfraRoles.ParseExpected(_store.List("Infra:ExpectedNodes"));
+        var members = cluster?.Members ?? [];
+
+        object DescribeMember(PatroniMember m)
+        {
+            var report = reports.FirstOrDefault(r =>
+                string.Equals(r.Node, m.Name, StringComparison.OrdinalIgnoreCase));
+            var age = report is null ? (TimeSpan?)null : now - report.ReceivedAt;
+            return new
+            {
+                m.Name,
+                m.Role,
+                m.State,
+                m.Host,
+                m.Port,
+                m.Timeline,
+                m.Lag,
+                m.Lsn,
+                // Silence is a state of its own. A node that stopped reporting is
+                // shown as unheard-from rather than as whatever it last claimed,
+                // because the two are not the same and only one needs attention.
+                selfCheck = report is null ? "never" : age > stale ? "stale" : report.Status,
+                selfCheckAt = report?.ReceivedAt,
+                selfCheckAgeSeconds = age is null ? (double?)null : Math.Round(age.Value.TotalSeconds),
+                selfCheckReport = report?.Report,
+            };
+        }
 
         return Ok(new
         {
@@ -76,41 +107,103 @@ public class InfraController : ControllerBase
             // would mean Patroni answered and the cluster is genuinely empty.
             reachable = cluster is not null,
             scope = cluster?.Scope,
-            members = (cluster?.Members ?? []).Select(m =>
-            {
-                var report = reports.FirstOrDefault(r =>
-                    string.Equals(r.Node, m.Name, StringComparison.OrdinalIgnoreCase));
-                var age = report is null ? (TimeSpan?)null : now - report.ReceivedAt;
-                return new
-                {
-                    m.Name,
-                    m.Role,
-                    m.State,
-                    m.Host,
-                    m.Port,
-                    m.Timeline,
-                    m.Lag,
-                    m.Lsn,
-                    // Silence is a state of its own. A node that stopped reporting is
-                    // shown as unheard-from rather than as whatever it last claimed,
-                    // because the two are not the same and only one needs attention.
-                    selfCheck = report is null ? "never" : age > stale ? "stale" : report.Status,
-                    selfCheckAt = report?.ReceivedAt,
-                    selfCheckAgeSeconds = age is null ? (double?)null : Math.Round(age.Value.TotalSeconds),
-                    selfCheckReport = report?.Report,
-                };
-            }),
+            members = members.Select(DescribeMember),
+            nodes = MergeNodes(members, reports, expected, stale, now),
             // Nodes that report but are not Patroni members — the etcd witness, for
             // one. Without this they would simply be invisible.
             unmatchedReports = reports
-                .Where(r => cluster is null || !cluster.Members.Any(m =>
+                .Where(r => !members.Any(m =>
                     string.Equals(m.Name, r.Node, StringComparison.OrdinalIgnoreCase)))
-                .Select(r => new { r.Node, r.Status, r.ReceivedAt, r.Report }),
+                .Select(r => new { r.Node, r.Status, r.ReceivedAt, r.Report, role = RoleOf(r) }),
             // The CLUSTER's backups, as distinct from the panel's per-tenant dumps.
             // These are what a lost machine is recovered from, and they were
             // invisible here until the node started sending its inventory along.
             backups = SummariseBackups(reports, stale, now),
         });
+    }
+
+    /// <summary>
+    /// Patroni members, anyone who has reported, and names we were told to expect.
+    /// Silence on an expected name is a card of its own — otherwise Mongo never
+    /// appearing looks the same as "we do not watch Mongo".
+    /// </summary>
+    private static List<object> MergeNodes(
+        IReadOnlyList<PatroniMember> members,
+        List<NodeHealth> reports,
+        IReadOnlyList<(string Name, string Role)> expected,
+        TimeSpan stale,
+        DateTime now)
+    {
+        var byName = new Dictionary<string, NodeView>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, role) in expected)
+            byName[name] = new NodeView { Name = name, Role = role, SelfCheck = "never" };
+
+        foreach (var report in reports)
+        {
+            var age = now - report.ReceivedAt;
+            var view = byName.GetValueOrDefault(report.Node) ?? new NodeView { Name = report.Node };
+            view.Role = string.IsNullOrWhiteSpace(report.Role) ? (view.Role.Length > 0 ? view.Role : InfraRoles.Infer(report.Node)) : InfraRoles.Normalize(report.Role);
+            view.SelfCheck = age > stale ? "stale" : report.Status;
+            view.SelfCheckAt = report.ReceivedAt;
+            view.SelfCheckAgeSeconds = Math.Round(age.TotalSeconds);
+            view.SelfCheckReport = report.Report;
+            byName[report.Node] = view;
+        }
+
+        foreach (var member in members)
+        {
+            var view = byName.GetValueOrDefault(member.Name) ?? new NodeView { Name = member.Name, SelfCheck = "never" };
+            if (view.Role.Length == 0 || view.Role == InfraRoles.Host) view.Role = InfraRoles.Postgres;
+            view.PatroniRole = member.Role;
+            view.State = member.State;
+            view.Host = member.Host;
+            view.Port = member.Port;
+            view.Timeline = member.Timeline;
+            view.Lag = member.Lag;
+            view.Lsn = member.Lsn;
+            byName[member.Name] = view;
+        }
+
+        return byName.Values
+            .OrderBy(n => Array.IndexOf(InfraRoles.DisplayOrder, n.Role) is var i && i >= 0 ? i : 99)
+            .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(n => (object)new
+            {
+                name = n.Name,
+                role = n.Role.Length > 0 ? n.Role : InfraRoles.Infer(n.Name),
+                selfCheck = n.SelfCheck,
+                selfCheckAt = n.SelfCheckAt,
+                selfCheckAgeSeconds = n.SelfCheckAgeSeconds,
+                selfCheckReport = n.SelfCheckReport,
+                patroniRole = n.PatroniRole,
+                state = n.State,
+                host = n.Host,
+                port = n.Port,
+                timeline = n.Timeline,
+                lag = n.Lag,
+                lsn = n.Lsn,
+            })
+            .ToList();
+    }
+
+    private static string RoleOf(NodeHealth report) =>
+        string.IsNullOrWhiteSpace(report.Role) ? InfraRoles.Infer(report.Node) : InfraRoles.Normalize(report.Role);
+
+    private sealed class NodeView
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
+        public string SelfCheck { get; set; } = "never";
+        public DateTime? SelfCheckAt { get; set; }
+        public double? SelfCheckAgeSeconds { get; set; }
+        public string? SelfCheckReport { get; set; }
+        public string? PatroniRole { get; set; }
+        public string? State { get; set; }
+        public string? Host { get; set; }
+        public int Port { get; set; }
+        public int? Timeline { get; set; }
+        public long? Lag { get; set; }
+        public string? Lsn { get; set; }
     }
 
     /// <summary>
@@ -218,6 +311,9 @@ public class InfraController : ControllerBase
         }
 
         row.Status = string.IsNullOrWhiteSpace(request.Status) ? "unknown" : request.Status.Trim();
+        row.Role = string.IsNullOrWhiteSpace(request.Role)
+            ? InfraRoles.Infer(node)
+            : InfraRoles.Normalize(request.Role);
         row.Report = request.Report;
         // Kept as the node sent it. Only nodes that actually hold the repository
         // report backups, so an absent field leaves the previous answer alone

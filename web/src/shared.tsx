@@ -78,6 +78,16 @@ export const CHECK_COLOR: Record<string, string> = {
   healthy: 'green', degraded: 'yellow', broken: 'red', stale: 'orange', never: 'gray',
 };
 
+export const ROLE_COLOR: Record<string, string> = {
+  postgres: 'blue', etcd: 'violet', mongo: 'green', app: 'teal', panel: 'grape', ci: 'gray', host: 'dark',
+};
+
+export const ROLE_LABEL: Record<string, string> = {
+  postgres: 'Postgres', etcd: 'etcd', mongo: 'Mongo', app: 'App', panel: 'Panel', ci: 'CI', host: 'Host',
+};
+
+export const ROLE_ORDER = ['postgres', 'etcd', 'mongo', 'app', 'panel', 'ci', 'host'];
+
 /**
  * Polls while the tab is visible.
  *

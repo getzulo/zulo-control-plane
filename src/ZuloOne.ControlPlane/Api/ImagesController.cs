@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
+using ZuloOne.ControlPlane.Settings;
 
 using ZuloOne.ControlPlane.Auth;
 
@@ -26,14 +27,17 @@ public class ImagesController : ControllerBase
     private readonly IHttpClientFactory _http;
     private readonly IJobQueue _queue;
     private readonly FleetConfig _fleet;
+    private readonly SettingsStore _settings;
 
     public ImagesController(
-        ControlPlaneDbContext db, IHttpClientFactory http, IJobQueue queue, FleetConfig fleet)
+        ControlPlaneDbContext db, IHttpClientFactory http, IJobQueue queue, FleetConfig fleet,
+        SettingsStore settings)
     {
         _db = db;
         _http = http;
         _queue = queue;
         _fleet = fleet;
+        _settings = settings;
     }
 
     /// <summary>
@@ -84,17 +88,20 @@ public class ImagesController : ControllerBase
             .Where(t => !IsRelease(t) && !IsRedundantCommitTag(t, digests))
             .OrderByDescending(t => t, StringComparer.Ordinal)
             .ToList();
+        var keepUnused = _settings.Int("Images:KeepUnusedReleases");
+        var rollback = RollbackWindow(releases, registry, repository, inUse, keepUnused);
 
         return Ok(new
         {
             registry,
             repository,
             defaultImage = _fleet.DefaultImage,
-            releases = releases.Select(t => Describe(t, registry, repository, inUse)),
-            builds = builds.Select(t => Describe(t, registry, repository, inUse)),
+            keepUnusedReleases = keepUnused,
+            releases = releases.Select(t => Describe(t, registry, repository, inUse, rollback)),
+            builds = builds.Select(t => Describe(t, registry, repository, inUse, rollback)),
         });
 
-        object Describe(string tag, string reg, string repo, IEnumerable<dynamic> used)
+        object Describe(string tag, string reg, string repo, IEnumerable<dynamic> used, HashSet<string> window)
         {
             var full = $"{reg}/{repo}:{tag}";
             var slugs = used.FirstOrDefault(u => (string)u.Tag == full)?.Slugs ?? new List<string>();
@@ -102,7 +109,7 @@ public class ImagesController : ControllerBase
             var siblings = digest is null
                 ? new List<string>()
                 : digests.Where(kv => kv.Value == digest && kv.Key != tag).Select(kv => kv.Key).OrderBy(x => x).ToList();
-            var blocker = digest is null ? "its digest could not be read" : WhyUndeletable(tag, siblings, reg, repo, used);
+            var blocker = digest is null ? "its digest could not be read" : WhyUndeletable(tag, siblings, reg, repo, used, window);
             return new
             {
                 tag,
@@ -133,8 +140,8 @@ public class ImagesController : ControllerBase
     ///
     /// <para>
     /// So the guards examine the whole sibling set, not the tag that was clicked.
-    /// If any name on the manifest is in use, is a release, or is the fleet default,
-    /// the whole manifest stays.
+    /// If any name on the manifest is in use, is the fleet default, or is one of
+    /// the newest unused releases (Images:KeepUnusedReleases), the whole manifest stays.
     /// </para>
     ///
     /// <para>
@@ -179,7 +186,9 @@ public class ImagesController : ControllerBase
             .Select(g => new { Tag = g.Key, Slugs = g.Select(x => x.Slug).ToList() })
             .ToListAsync(ct);
 
-        var blocker = WhyUndeletable(tag, siblings, registry, repository, inUse);
+        var releases = tags.Where(IsRelease).OrderByDescending(t => t, CalVer).ToList();
+        var rollback = RollbackWindow(releases, registry, repository, inUse, _settings.Int("Images:KeepUnusedReleases"));
+        var blocker = WhyUndeletable(tag, siblings, registry, repository, inUse, rollback);
         if (blocker is not null) return Conflict(new { error = blocker, digest, alsoTagged = siblings });
 
         var response = await client.DeleteAsync($"http://{registry}/v2/{repository}/manifests/{digest}", ct);
@@ -204,10 +213,78 @@ public class ImagesController : ControllerBase
     }
 
     /// <summary>
+    /// Removes every unused manifest the single-delete guards would allow — old
+    /// releases past the rollback window, and CI builds that no tenant runs.
+    /// </summary>
+    [HttpPost("prune-unused")]
+    public async Task<IActionResult> PruneUnused(CancellationToken ct)
+    {
+        var (registry, repository) = SplitImage(_fleet.DefaultImage);
+        if (registry is null)
+            return BadRequest(new { error = "Fleet:DefaultImage does not name a registry." });
+
+        List<string> tags;
+        using var client = _http.CreateClient("registry");
+        try
+        {
+            var json = await client.GetStringAsync($"http://{registry}/v2/{repository}/tags/list", ct);
+            tags = JsonDocument.Parse(json).RootElement.TryGetProperty("tags", out var t) && t.ValueKind == JsonValueKind.Array
+                ? t.EnumerateArray().Select(x => x.GetString() ?? string.Empty).Where(x => x.Length > 0).ToList()
+                : [];
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = $"Could not read the registry: {ex.Message}" });
+        }
+
+        var digests = await ResolveDigestsAsync(registry, repository, tags, ct);
+        var inUse = await _db.Tenants.AsNoTracking()
+            .GroupBy(t => t.ImageTag)
+            .Select(g => new { Tag = g.Key, Slugs = g.Select(x => x.Slug).ToList() })
+            .ToListAsync(ct);
+        var releases = tags.Where(IsRelease).OrderByDescending(t => t, CalVer).ToList();
+        var rollback = RollbackWindow(releases, registry, repository, inUse, _settings.Int("Images:KeepUnusedReleases"));
+
+        var removed = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tag in tags)
+        {
+            if (!digests.TryGetValue(tag, out var digest) || digest is null || !seen.Add(digest))
+                continue;
+            var siblings = digests.Where(kv => kv.Value == digest && kv.Key != tag).Select(kv => kv.Key).OrderBy(x => x).ToList();
+            if (WhyUndeletable(tag, siblings, registry, repository, inUse, rollback) is not null)
+                continue;
+
+            var response = await client.DeleteAsync($"http://{registry}/v2/{repository}/manifests/{digest}", ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(ct);
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    error = response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed
+                        ? "The registry refuses deletes. Set REGISTRY_STORAGE_DELETE_ENABLED=true on it."
+                        : $"The registry rejected the delete of '{tag}' ({(int)response.StatusCode}): {body}",
+                    removed,
+                });
+            }
+            removed.AddRange(siblings.Prepend(tag));
+        }
+
+        return Ok(new
+        {
+            success = true,
+            removed = removed.Distinct().OrderBy(x => x).ToList(),
+            note = "Manifests are gone. Disk is freed only when `registry garbage-collect` runs on the registry host.",
+        });
+    }
+
+    /// <summary>
     /// Why this manifest may not be removed, or null when it may. Judged over every
     /// tag on it, because they die together.
     /// </summary>
-    private string? WhyUndeletable(string tag, List<string> siblings, string registry, string repository, IEnumerable<dynamic> inUse)
+    private string? WhyUndeletable(
+        string tag, List<string> siblings, string registry, string repository,
+        IEnumerable<dynamic> inUse, HashSet<string> rollbackWindow)
     {
         foreach (var name in siblings.Prepend(tag))
         {
@@ -224,15 +301,32 @@ public class ImagesController : ControllerBase
                     ? $"'{tag}' is the fleet default — every new tenant starts on it."
                     : $"'{tag}' is the same image as '{name}', the fleet default.";
 
-            // A release is what a tenant rolls BACK to when an upgrade goes wrong.
-            // Keeping every one of them costs a manifest; losing one costs the only
-            // way back.
-            if (IsRelease(name))
+            if (rollbackWindow.Contains(name))
                 return name == tag
-                    ? $"'{tag}' is a release. Releases are kept — a tenant may need to roll back onto it."
-                    : $"'{tag}' is the same image as release '{name}', which is kept so a tenant can roll back onto it.";
+                    ? $"'{tag}' is one of the newest unused releases — kept as a rollback window (Images:KeepUnusedReleases)."
+                    : $"'{tag}' is the same image as '{name}', kept as a rollback window.";
         }
         return null;
+    }
+
+    /// <summary>
+    /// Newest unused, non-default releases that stay even though nobody runs them —
+    /// the registry-side rollback window, counted the same way the app-host sweep is.
+    /// </summary>
+    private HashSet<string> RollbackWindow(
+        List<string> releases, string registry, string repository, IEnumerable<dynamic> inUse, int keep)
+    {
+        if (keep <= 0) return [];
+        return releases
+            .Where(tag =>
+            {
+                var full = $"{registry}/{repository}:{tag}";
+                if (string.Equals(full, _fleet.DefaultImage, StringComparison.Ordinal)) return false;
+                var users = inUse.FirstOrDefault(u => (string)u.Tag == full)?.Slugs as List<string>;
+                return users is not { Count: > 0 };
+            })
+            .Take(keep)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     /// <summary>

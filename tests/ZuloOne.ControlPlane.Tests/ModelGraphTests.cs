@@ -77,6 +77,117 @@ public sealed class ModelGraphTests
     }
 
     [Fact]
+    public void Parse_treats_extension_targets_as_dependencies()
+    {
+        var accounting = """
+            {
+              "object": { "name": "Accounting", "modelVersion": "1.0.0", "isSystem": false, "metaId": "acc" },
+              "dependencies": [
+                { "dependsOnModelMetaId": "aa", "name": "Accounting->Common" }
+              ]
+            }
+            """;
+        var production = """
+            {
+              "object": { "name": "Production", "modelVersion": "1.0.0", "isSystem": false, "metaId": "prod" },
+              "dependencies": []
+            }
+            """;
+        var sales = """
+            {
+              "object": { "name": "Sales", "modelVersion": "1.0.0", "isSystem": false, "metaId": "sales" },
+              "dependencies": []
+            }
+            """;
+        var bom = """
+            {
+              "kind": "Dictionary",
+              "object": { "name": "BillOfMaterials", "metaId": "bom", "modelId": "prod" }
+            }
+            """;
+        var invoice = """
+            {
+              "kind": "Document",
+              "object": { "name": "SalesInvoice", "metaId": "invc", "modelId": "sales" }
+            }
+            """;
+        var bomExt = """
+            {
+              "kind": "DictionaryExtension",
+              "object": { "name": "BillOfMaterials.Accounting", "modelId": "acc", "targetDictionaryMetaId": "bom" }
+            }
+            """;
+        var invoiceExt = """
+            {
+              "kind": "DocumentExtension",
+              "object": { "name": "SalesInvoice.Accounting", "modelId": "acc", "targetDocumentTypeMetaId": "invc" }
+            }
+            """;
+
+        var graph = ModelGraph.Parse([
+            ("Common/model.json", CommonJson),
+            ("Accounting/model.json", accounting),
+            ("Production/model.json", production),
+            ("Sales/model.json", sales),
+            ("Production/Dictionaries/BillOfMaterials/BillOfMaterials.object.json", bom),
+            ("Sales/Documents/SalesInvoice/SalesInvoice.object.json", invoice),
+            ("Accounting/DictionaryExtensions/BillOfMaterials.Accounting/BillOfMaterials.Accounting.extension.json", bomExt),
+            ("Accounting/DocumentExtensions/SalesInvoice.Accounting/SalesInvoice.Accounting.extension.json", invoiceExt),
+        ]).ToDictionary(n => n.Name);
+
+        Assert.Contains("Common", graph["Accounting"].DependsOn);
+        Assert.Contains("Production", graph["Accounting"].DependsOn);
+        Assert.Contains("Sales", graph["Accounting"].DependsOn);
+    }
+
+    [Fact]
+    public void Expand_pulls_extension_target_models()
+    {
+        var accounting = """
+            {
+              "object": { "name": "Accounting", "modelVersion": "1.0.0", "isSystem": false, "metaId": "acc" },
+              "dependencies": [
+                { "dependsOnModelMetaId": "aa", "name": "Accounting->Common" }
+              ]
+            }
+            """;
+        var production = """
+            {
+              "object": { "name": "Production", "modelVersion": "1.0.0", "isSystem": false, "metaId": "prod" },
+              "dependencies": []
+            }
+            """;
+        var bom = """
+            {
+              "kind": "Dictionary",
+              "object": { "name": "BillOfMaterials", "metaId": "bom", "modelId": "prod" }
+            }
+            """;
+        var bomExt = """
+            {
+              "kind": "DictionaryExtension",
+              "object": { "name": "BillOfMaterials.Accounting", "modelId": "acc", "targetDictionaryMetaId": "bom" }
+            }
+            """;
+
+        var graph = ModelGraph.Parse([
+            ("Common/model.json", CommonJson),
+            ("Core/model.json", CoreJson),
+            ("Accounting/model.json", accounting),
+            ("Production/model.json", production),
+            ("Production/Dictionaries/BillOfMaterials/BillOfMaterials.object.json", bom),
+            ("Accounting/DictionaryExtensions/BillOfMaterials.Accounting/BillOfMaterials.Accounting.extension.json", bomExt),
+        ]).ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+
+        var expanded = ModelGraph.Expand(["Accounting"], graph);
+
+        Assert.Contains("Accounting", expanded);
+        Assert.Contains("Production", expanded);
+        Assert.Contains("Common", expanded);
+        Assert.Contains("Core", expanded);
+    }
+
+    [Fact]
     public void Outdated_is_a_real_version_compare()
     {
         Assert.True(ModelGraph.IsOutdated("1.0.0", "1.3.0"));

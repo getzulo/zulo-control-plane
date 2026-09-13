@@ -156,6 +156,13 @@ public static class SettingsCatalog
             + "far behind is an old image somebody needs right now.",
             SettingKind.Int, "5", Min: 1, Max: 100),
 
+        new("Images:KeepUnusedReleases", Backups,
+            "Unused releases kept in the registry",
+            "How many of the newest unused release tags stay after a prune, on top of every "
+            + "release a tenant runs and the fleet default. Older unused releases can be deleted "
+            + "from the Images screen. Zero means every unused non-default release is removable.",
+            SettingKind.Int, "3", Min: 0, Max: 50),
+
         // -------------------------------------------------------------- Fleet
         new("Fleet:DefaultImage", Fleet,
             "Image new tenants start on",
@@ -190,6 +197,14 @@ public static class SettingsCatalog
             SettingKind.TextList, "Common,Organization"),
 
         // --------------------------------------------------------- Monitoring
+        new("Infra:ExpectedNodes", Monitoring,
+            "Machines that should report",
+            "name:role, comma-separated. Roles: postgres, etcd, mongo, app, panel, ci. "
+            + "A name that never reports is shown as never heard from — that is how a missing "
+            + "Mongo or app host becomes visible. Empty lists only who has spoken or who Patroni sees.",
+            SettingKind.TextList,
+            "zo-pg-1:postgres,zo-pg-2:postgres,zo-pgw-1:etcd,zo-app-1:app,mongo:mongo,zo-cp-1:panel,zo-ci-1:ci"),
+
         new("Patroni:ReportStaleAfterMinutes", Monitoring,
             "A node report goes stale after",
             "Beyond this the panel shows a node as unheard-from rather than as whatever it last "
