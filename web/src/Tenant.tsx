@@ -8,7 +8,7 @@ import {
   IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconHammer, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
 import { api, type ImageTag, type Job, type LogTenantRow, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
-import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, useJob, usePoll } from './shared';
+import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, inputChecked, useJob, usePoll } from './shared';
 
 /**
  * One number with its context. A bar only when there is a ceiling to be a
@@ -432,7 +432,7 @@ export function TenantPage() {
                       disabled={!tenant.databaseName || Boolean(job && (job.state === 'Queued' || job.state === 'Running'))}
                       label={tenant.developerStand ? 'Own inventory — Zulo models editable' : 'Customer — Zulo models locked'}
                       onChange={(e) => {
-                        const enabled = e.currentTarget.checked;
+                        const enabled = inputChecked(e);
                         void (async () => {
                           try {
                             const r = await api.setDeveloperStand(id, enabled);

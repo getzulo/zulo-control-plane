@@ -7,7 +7,7 @@ import {
   IconAlertTriangle, IconChevronDown, IconChevronRight, IconDownload, IconHammer, IconPackage, IconRocket,
 } from '@tabler/icons-react';
 import { api, type ModelCatalogue } from './api';
-import { JobProgress, useJob, usePoll } from './shared';
+import { JobProgress, inputChecked, useJob, usePoll } from './shared';
 
 type CatalogueModel = ModelCatalogue['models'][number];
 type CatalogueTenant = ModelCatalogue['tenants'][number];
@@ -200,8 +200,10 @@ export function ModelsPage() {
                         <Checkbox
                           aria-label={`Include ${t.slug} in the rollout`}
                           checked={selected.includes(t.id)}
-                          onChange={(e) => setSelected((s) =>
-                            e.currentTarget.checked ? [...s, t.id] : s.filter((x) => x !== t.id))}
+                          onChange={(e) => {
+                            const on = inputChecked(e);
+                            setSelected((s) => on ? [...s, t.id] : s.filter((x) => x !== t.id));
+                          }}
                         />
                       </Table.Td>
                       <Table.Td>
@@ -395,7 +397,7 @@ export function ModelsPage() {
                   }
                   checked={checked}
                   disabled={requiredBy.length > 0}
-                  onChange={(e) => toggleInstallModel(m.model, e.currentTarget.checked)}
+                  onChange={(e) => toggleInstallModel(m.model, inputChecked(e))}
                 />
               );
             })}

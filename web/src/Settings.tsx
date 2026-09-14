@@ -5,7 +5,7 @@ import {
 } from '@mantine/core';
 import { IconAlertTriangle, IconArrowBackUp, IconDeviceFloppy } from '@tabler/icons-react';
 import { api, type SettingDef, type SettingGroup } from './api';
-import { usePoll } from './shared';
+import { afterInputEvent, inputChecked, usePoll } from './shared';
 
 const SOURCE_LABEL: Record<SettingDef['source'], { text: string; color: string; hint: string }> = {
   Database: { text: 'set here', color: 'blue', hint: 'Overridden in this panel. Revert to fall back to cp.env.' },
@@ -73,7 +73,11 @@ export function SettingsPage() {
     switch (d.kind) {
       case 'Bool':
         return (
-          <Switch checked={v === 'true'} onChange={(e) => set(d, String(e.currentTarget.checked))}
+          <Switch checked={v === 'true'}
+                  onChange={(e) => {
+                    const on = inputChecked(e);
+                    afterInputEvent(() => set(d, String(on)));
+                  }}
                   label={v === 'true' ? 'On' : 'Off'} />
         );
       case 'Bytes':

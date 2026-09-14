@@ -4,6 +4,20 @@ import { IconRefresh } from '@tabler/icons-react';
 import { api, type Health, type Job } from './api';
 
 /**
+ * React 19 nulls `event.currentTarget` once a sync setState re-renders (and
+ * Mantine Switch then reads `.checked` after the consumer onChange). Take the
+ * flag now. For Switch, apply the update on a microtask so Mantine finishes first.
+ */
+export function inputChecked(e: { currentTarget: { checked?: boolean } | null; target: EventTarget | null }): boolean {
+  const el = (e.currentTarget ?? e.target) as { checked?: boolean } | null;
+  return Boolean(el?.checked);
+}
+
+export function afterInputEvent(apply: () => void): void {
+  queueMicrotask(apply);
+}
+
+/**
  * Which panel build this is — read from the SERVER, never from a compile-time
  * constant baked into the bundle.
  *

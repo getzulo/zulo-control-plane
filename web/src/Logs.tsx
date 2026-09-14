@@ -6,7 +6,7 @@ import {
 } from '@mantine/core';
 import { IconAlertTriangle, IconNotes, IconTrash } from '@tabler/icons-react';
 import { api, type LogEventRow, type LogStoreStatus, type LogTenantRow } from './api';
-import { fmt, fmtBytes, usePoll } from './shared';
+import { afterInputEvent, fmt, fmtBytes, inputChecked, usePoll } from './shared';
 
 const LEVELS = ['Verbose', 'Debug', 'Information', 'Warning', 'Error', 'Fatal'];
 const CHANNELS = ['', 'Http', 'Script', 'Job', 'Agent', 'System'];
@@ -203,7 +203,10 @@ export function LogsPage() {
             <Text fw={600}>Events {slug ? `· ${slug}` : '· all tenants'}</Text>
           </Group>
           <Group gap="xs">
-            <Switch size="xs" label="Tail" checked={tail} onChange={(e) => setTail(e.currentTarget.checked)} />
+            <Switch size="xs" label="Tail" checked={tail} onChange={(e) => {
+              const on = inputChecked(e);
+              afterInputEvent(() => setTail(on));
+            }} />
             <Button size="xs" variant="default" onClick={() => void refreshEvents()}>Refresh</Button>
           </Group>
         </Group>

@@ -5,7 +5,7 @@ import {
 } from '@mantine/core';
 import { IconAlertTriangle, IconLink, IconPlus } from '@tabler/icons-react';
 import { api, type FleetHealth } from './api';
-import { JobProgress, STATUS_COLOR, fmt, useJob, usePoll } from './shared';
+import { JobProgress, STATUS_COLOR, afterInputEvent, fmt, inputChecked, useJob, usePoll } from './shared';
 
 export function TenantsPage() {
   const navigate = useNavigate();
@@ -148,7 +148,10 @@ function NewTenant({ opened, onClose, onJob }: { opened: boolean; onClose: () =>
           label="Developer stand"
           description="Your own inventory: Zulo product models stay editable. Leave off for a customer."
           checked={developerStand}
-          onChange={(e) => setDeveloperStand(e.currentTarget.checked)}
+          onChange={(e) => {
+            const on = inputChecked(e);
+            afterInputEvent(() => setDeveloperStand(on));
+          }}
           disabled={busy}
         />
         <Text size="xs" c="dimmed">
