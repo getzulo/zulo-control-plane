@@ -79,6 +79,7 @@ public static class ModelGraph
                     var version = obj.TryGetProperty("modelVersion", out var v) ? v.GetString() ?? "" : "";
                     var isSystem = obj.TryGetProperty("isSystem", out var sys) && sys.ValueKind == JsonValueKind.True;
                     var metaId = obj.TryGetProperty("metaId", out var id) ? id.GetString() ?? "" : "";
+                    if (StandModel.IsMetaId(metaId) || StandModel.IsShippedName(name)) continue;
                     if (metaId.Length > 0) byId[metaId] = name;
 
                     var depIds = new List<string>();

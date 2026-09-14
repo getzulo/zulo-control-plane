@@ -74,6 +74,7 @@ public sealed class InstallModelsJobHandler : IJobHandler
             var graph = (await _trees.ReadGraphAsync(source, ct))
                 .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
             wanted = ModelGraph.Expand(wanted, graph)
+                .Where(name => !StandModel.IsShippedName(name))
                 .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
                 .ToList();
         }

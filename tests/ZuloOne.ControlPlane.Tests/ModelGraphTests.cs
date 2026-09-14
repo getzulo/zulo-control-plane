@@ -208,6 +208,48 @@ public sealed class ModelGraphTests
     }
 
     [Fact]
+    public void Parse_drops_the_seeded_stand_model()
+    {
+        const string local = """
+            {
+              "object": {
+                "name": "Local",
+                "modelVersion": "1.0.0",
+                "isSystem": false,
+                "metaId": "7e2c1f0a-9b4d-4e6a-8c3f-1d5a7b9e2c40"
+              }
+            }
+            """;
+        const string renamed = """
+            {
+              "object": {
+                "name": "Okrasheno",
+                "modelVersion": "1.0.0",
+                "isSystem": false,
+                "metaId": "7e2c1f0a-9b4d-4e6a-8c3f-1d5a7b9e2c40"
+              }
+            }
+            """;
+
+        var graph = ModelGraph.Parse([
+            ("Common/model.json", CommonJson),
+            ("Local/model.json", local),
+            ("Okrasheno/model.json", renamed),
+        ]);
+
+        Assert.Contains(graph, n => n.Name == "Common");
+        Assert.DoesNotContain(graph, n => n.Name == "Local");
+        Assert.DoesNotContain(graph, n => n.Name == "Okrasheno");
+    }
+
+    [Fact]
+    public void ParseModels_drops_Local_from_a_leaked_label()
+    {
+        var models = RegistryModelCatalog.ParseModels("Common=1.2.3,Local=1.0.0,Sales=1.3.6");
+        Assert.Equal(["Common", "Sales"], models.Select(m => m.Name).ToList());
+    }
+
+    [Fact]
     public void PickDistribution_skips_platform_only_core()
     {
         var images = new List<CatalogueImage>

@@ -79,6 +79,7 @@ public class ModelsController : ControllerBase
         // row reads as "this is current, these are the older ones still available".
         var models = images
             .SelectMany(i => i.Models.Select(m => (i, m)))
+            .Where(x => !StandModel.IsShippedName(x.m.Name))
             .GroupBy(x => x.m.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
             .Select(g =>
@@ -177,7 +178,9 @@ public class ModelsController : ControllerBase
                 i.Tag,
                 platform = i.Platform,
                 workspace = i.WorkspaceCommit,
-                models = i.Models.Select(m => new { name = m.Name, version = m.Version }).ToList(),
+                models = i.Models
+                    .Where(m => !StandModel.IsShippedName(m.Name))
+                    .Select(m => new { name = m.Name, version = m.Version }).ToList(),
             }),
             tenants,
         });
@@ -226,6 +229,7 @@ public class ModelsController : ControllerBase
             var graph = (await _trees.ReadGraphAsync(source, ct))
                 .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
             wanted = ModelGraph.Expand(wanted, graph)
+                .Where(name => !StandModel.IsShippedName(name))
                 .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
                 .ToArray();
         }
