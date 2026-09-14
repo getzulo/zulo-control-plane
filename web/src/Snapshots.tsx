@@ -127,20 +127,38 @@ export function SnapshotsPage() {
                 />
                 <Button
                   size="xs" variant="light" leftSection={<IconDatabaseExport size={14} />}
-                  loading={backing} disabled={Boolean(cluster?.backups?.pending)}
+                  loading={backing}
+                  disabled={Boolean(cluster?.backups?.pending) || Boolean(cluster?.backups?.asOfStale)}
                   onClick={() => void takeCluster()}
                 >
                   Backup now
                 </Button>
               </Group>
             </Group>
-            {cluster?.backups?.pending && (
-              <Alert color="blue" mb="xs" p="xs">
+            {cluster?.backups?.asOfStale && !cluster.backups.pending && (
+              <Alert color="orange" mb="xs" p="xs" icon={<IconAlertTriangle size={14} />}>
                 <Text size="xs">
-                  {cluster.backups.pending.type} backup waiting for{' '}
+                  {cluster.backups.node} has not checked in since {fmt(cluster.backups.asOf)}.
+                  Backup now is delivered on that health check, so it cannot start until the
+                  timer on the host is running again. Take a backup there directly:
+                  <Code>sudo -u postgres pgbackrest --stanza=zuloone --type=full backup</Code>
+                </Text>
+              </Alert>
+            )}
+            {cluster?.backups?.pending && (
+              <Alert color={cluster.backups.asOfStale ? 'red' : 'blue'} mb="xs" p="xs"
+                icon={cluster.backups.asOfStale ? <IconAlertTriangle size={14} /> : undefined}>
+                <Text size="xs">
+                  {cluster.backups.pending.type} backup is queued for{' '}
                   <b>{cluster.backups.pending.targetNode ?? 'the repository node'}</b>
-                  {' '}— it runs on that node's next health check (up to 5 minutes). If this
-                  sits longer, deploy the current <Code>check-cluster.sh</Code> on that host.
+                  {cluster.backups.asOfStale
+                    ? <> — but that node last reported {fmt(cluster.backups.asOf)} and the
+                      check is stale, so nothing is running. On the host:{' '}
+                      <Code>sudo -u postgres pgbackrest --stanza=zuloone --type={cluster.backups.pending.type} backup</Code>
+                    </>
+                    : <> — it runs on that node's next health check (up to 5 minutes). If this
+                      sits longer, deploy the current <Code>check-cluster.sh</Code> on that host.
+                    </>}
                 </Text>
               </Alert>
             )}

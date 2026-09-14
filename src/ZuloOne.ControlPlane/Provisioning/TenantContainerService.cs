@@ -134,6 +134,8 @@ public sealed class TenantContainerService
             // and a tenant that bought accounting does not silently acquire payroll
             // because it shipped in the same file.
             $"ZuloOne__Packages__Install={ModelsFor(tenant)}",
+            $"ZuloOne__TenantSlug={tenant.Slug}",
+            $"ZuloOne__TenantName={tenant.DisplayName ?? tenant.Slug}",
         };
         if (tenant.DeveloperStand)
             env.Add("ZuloOne__ProductModelDevMode=true");
@@ -143,7 +145,6 @@ public sealed class TenantContainerService
             && !string.IsNullOrWhiteSpace(tenant.LogUser)
             && !string.IsNullOrWhiteSpace(tenant.LogPassword))
         {
-            env.Add($"ZuloOne__TenantSlug={tenant.Slug}");
             env.Add(
                 $"Logging__Mongo__Url={_logDatabases.TenantConnectionUrl(tenant.LogDatabase, tenant.LogUser, tenant.LogPassword)}");
             env.Add($"Logging__Mongo__Database={tenant.LogDatabase}");

@@ -154,6 +154,20 @@ public class InfraController : ControllerBase
         if (holder is null)
             return Conflict(new { error = "No node has reported a backup repository yet. The request has nowhere to go." });
 
+        var staleAfter = TimeSpan.FromMinutes(Math.Max(1, _settings.ReportStaleAfterMinutes));
+        if (DateTime.UtcNow - holder.ReceivedAt > staleAfter)
+        {
+            // Backup now is delivered on the next health POST. A node that has not
+            // spoken in days will never pick the request up — saying yes here is
+            // how the button looks like it started something that is not running.
+            return Conflict(new
+            {
+                error = $"{holder.Node} last reported at {holder.ReceivedAt:u} and is stale. "
+                    + "Backup now waits for that check. Run pgbackrest on the repository host, "
+                    + "or restore zuloone-cluster-check so the node speaks again.",
+            });
+        }
+
         var job = await _queue.EnqueueAsync(
             JobKind.Backup, tenantId: null, tenantSlug: null,
             new BackupPayload(type, holder.Node), OperatorIdentity.Of(User), ct);
