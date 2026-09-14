@@ -135,6 +135,8 @@ export interface Tenant {
   previousDatabaseAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Operator's own inventory — Zulo product models are editable. */
+  developerStand?: boolean;
 }
 
 export type JobState = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
@@ -146,6 +148,8 @@ export type JobKind =
   | 'InstallModels'
   /** Schema + entity types + scripts; no tree is pushed. */
   | 'CompileModels'
+  /** Recreate the container so boot env (developer stand) applies. */
+  | 'Recreate'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
   | 'Prune'
   /** Dump of the panel's OWN database — the record of which container belongs to whom. */
@@ -512,7 +516,7 @@ export const api = {
   listTenants: () => request<Tenant[]>('/api/tenants'),
 
   /** Returns 202 with the tenant AND the job building it. */
-  createTenant: (body: { slug: string; displayName?: string; adminEmail: string; imageTag?: string; plan?: string }) =>
+  createTenant: (body: { slug: string; displayName?: string; adminEmail: string; imageTag?: string; plan?: string; developerStand?: boolean }) =>
     request<{ tenant: Tenant; jobId: string }>('/api/tenants', { method: 'POST', body: JSON.stringify(body) }),
 
   /** Brings a hand-deployed tenant under management. Its users are logged out. */
@@ -679,6 +683,11 @@ export const api = {
   /** Schema sync, entity types, then scripts. Does not push a tree. */
   compileModels: (tenantId: string) =>
     request<{ jobId: string }>(`/api/tenants/${tenantId}/compile-models`, { method: 'POST' }),
+
+  setDeveloperStand: (tenantId: string, enabled: boolean) =>
+    request<{ jobId: string | null }>(`/api/tenants/${tenantId}/developer-stand`, {
+      method: 'POST', body: JSON.stringify({ enabled }),
+    }),
 
   /** Asks a running job to stop. A wave checks between tenants, never inside one. */
   cancelJob: (id: string) =>

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Table, Tabs,
+  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Switch, Table, Tabs,
   Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import {
@@ -134,6 +134,11 @@ export function TenantPage() {
                 {tenant.health}
               </Badge>
               {isCopy && <Badge color="grape" variant="filled">restored copy</Badge>}
+              {tenant.developerStand && (
+                <Tooltip label="This is your inventory — Zulo product models can be edited in the designer." withArrow>
+                  <Badge color="violet" variant="light">dev stand</Badge>
+                </Tooltip>
+              )}
             </Group>
             <Anchor size="sm" href={`https://${tenant.slug}.zulo.one`} target="_blank" rel="noreferrer">
               {tenant.slug}.zulo.one
@@ -281,6 +286,30 @@ export function TenantPage() {
                         : 'open log viewer'}
                     </Anchor>
                     {journal?.sinkSilent && <Badge size="xs" color="red" ml={6}>sink silent</Badge>}
+                  </Table.Td>
+                </Table.Tr>
+                <Table.Tr>
+                  <Table.Td c="dimmed">Developer stand</Table.Td>
+                  <Table.Td>
+                    <Switch
+                      size="sm"
+                      checked={Boolean(tenant.developerStand)}
+                      disabled={!tenant.databaseName || Boolean(job && (job.state === 'Queued' || job.state === 'Running'))}
+                      label={tenant.developerStand ? 'Own inventory — Zulo models editable' : 'Customer — Zulo models locked'}
+                      onChange={(e) => {
+                        const enabled = e.currentTarget.checked;
+                        void (async () => {
+                          try {
+                            const r = await api.setDeveloperStand(id, enabled);
+                            if (r.jobId) setJobId(r.jobId);
+                            void refresh();
+                          } catch (err) { setError((err as Error).message); }
+                        })();
+                      }}
+                    />
+                    <Text size="xs" c="dimmed" mt={4}>
+                      Recreates the container so the flag is read at start. Does not open the API without a token.
+                    </Text>
                   </Table.Td>
                 </Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Administrator</Table.Td><Table.Td>{tenant.adminEmail ?? '—'}</Table.Td></Table.Tr>

@@ -225,6 +225,14 @@ public class Tenant
     [MaxLength(2000)]
     public string? Models { get; set; }
 
+    /// <summary>
+    /// Operator's own inventory: the container boots with
+    /// <c>ZuloOne__ProductModelDevMode</c> so Zulo product models can be edited
+    /// in the designer. Customer tenants stay false. Changing this requires a
+    /// container recreate — env is read at process start.
+    /// </summary>
+    public bool DeveloperStand { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

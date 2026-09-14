@@ -9,7 +9,9 @@ using ZuloOne.ControlPlane.Auth;
 namespace ZuloOne.ControlPlane.Api;
 
 /// <summary>What an operator supplies to create a tenant.</summary>
-public record CreateTenantRequest(string Slug, string? DisplayName, string AdminEmail, string? ImageTag, string? Plan);
+public record CreateTenantRequest(
+    string Slug, string? DisplayName, string AdminEmail, string? ImageTag, string? Plan,
+    bool DeveloperStand = false);
 
 /// <summary>
 /// Which account to reset, and the slug retyped to confirm. A reset is not
@@ -96,7 +98,8 @@ public class TenantsController : ControllerBase
             // of database + container + first-boot work happen on a worker whose
             // lifetime is the service's, not this request's.
             var tenant = await _provisioner.RegisterAsync(
-                request.Slug, request.DisplayName, request.AdminEmail, request.ImageTag, request.Plan, ct);
+                request.Slug, request.DisplayName, request.AdminEmail, request.ImageTag, request.Plan,
+                request.DeveloperStand, ct);
 
             var job = await _queue.EnqueueAsync(
                 JobKind.Provision, tenant.Id, tenant.Slug,
@@ -403,6 +406,33 @@ public class TenantsController : ControllerBase
         tenant.Status = TenantStatus.Active;
     });
 
+    public sealed record DeveloperStandRequest(bool Enabled);
+
+    /// <summary>
+    /// Marks this container as the operator's own inventory (or a customer).
+    /// The process reads the flag at start, so the container is recreated.
+    /// </summary>
+    [HttpPost("{id:guid}/developer-stand")]
+    public async Task<IActionResult> SetDeveloperStand(Guid id, [FromBody] DeveloperStandRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant == null) return NotFound(new { error = "Tenant not found", id });
+        if (string.IsNullOrWhiteSpace(tenant.DatabaseName))
+            return BadRequest(new { error = "Tenant has no database — provision it first." });
+
+        if (tenant.DeveloperStand == request.Enabled)
+            return Ok(new { jobId = (string?)null, tenant = Summary(tenant) });
+
+        tenant.DeveloperStand = request.Enabled;
+        tenant.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Recreate, tenant.Id, tenant.Slug, payload: null,
+            OperatorIdentity.Of(User), ct);
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id, tenant = Summary(tenant) });
+    }
+
     /// <summary>
     /// The administrator password minted at provisioning — returned ONCE, then
     /// erased from the registry.
@@ -581,6 +611,7 @@ public class TenantsController : ControllerBase
         hasUnreadAdminPassword = !string.IsNullOrEmpty(t.AdminPasswordOnce),
         t.LastHealthAt,
         t.LastError,
+        t.DeveloperStand,
         t.CreatedAt,
         t.UpdatedAt,
     };

@@ -135,6 +135,8 @@ public sealed class TenantContainerService
             // because it shipped in the same file.
             $"ZuloOne__Packages__Install={ModelsFor(tenant)}",
         };
+        if (tenant.DeveloperStand)
+            env.Add("ZuloOne__ProductModelDevMode=true");
 
         if (_logDatabases.IsConfigured
             && !string.IsNullOrWhiteSpace(tenant.LogDatabase)

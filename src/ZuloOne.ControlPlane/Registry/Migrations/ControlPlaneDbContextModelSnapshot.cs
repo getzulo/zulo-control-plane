@@ -226,6 +226,9 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                         .HasMaxLength(63)
                         .HasColumnType("character varying(63)");
 
+                    b.Property<bool>("DeveloperStand")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("DisplayName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");

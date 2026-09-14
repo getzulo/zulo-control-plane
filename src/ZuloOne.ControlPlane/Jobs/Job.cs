@@ -86,6 +86,12 @@ public enum JobKind
     /// exposes.
     /// </remarks>
     CompileModels,
+
+    /// <summary>
+    /// Recreate the container on the same image so boot env (developer stand)
+    /// is picked up. No model tree is pushed.
+    /// </summary>
+    Recreate,
 }
 
 /// <summary>

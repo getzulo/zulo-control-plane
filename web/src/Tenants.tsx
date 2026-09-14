@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Table, Text, TextInput, Title,
+  Alert, Badge, Button, Card, Code, Group, Loader, Modal, Stack, Switch, Table, Text, TextInput, Title,
 } from '@mantine/core';
 import { IconAlertTriangle, IconLink, IconPlus } from '@tabler/icons-react';
 import { api, type FleetHealth } from './api';
@@ -79,6 +79,7 @@ export function TenantsPage() {
                     <Group gap={6}>
                       <Text fw={600}>{t.slug}</Text>
                       {t.restoredFromSlug && <Badge size="xs" color="grape" variant="light">copy</Badge>}
+                      {t.developerStand && <Badge size="xs" color="violet" variant="light">dev stand</Badge>}
                     </Group>
                     {t.displayName && <Text size="xs" c="dimmed">{t.displayName}</Text>}
                     {t.lastError && <Text size="xs" c="red" lineClamp={2}>{t.lastError}</Text>}
@@ -115,6 +116,7 @@ function NewTenant({ opened, onClose, onJob }: { opened: boolean; onClose: () =>
   const [slug, setSlug] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
+  const [developerStand, setDeveloperStand] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const slugOk = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(slug);
@@ -122,9 +124,11 @@ function NewTenant({ opened, onClose, onJob }: { opened: boolean; onClose: () =>
   const submit = async () => {
     setBusy(true); setError(null);
     try {
-      const r = await api.createTenant({ slug, displayName: displayName || undefined, adminEmail });
+      const r = await api.createTenant({
+        slug, displayName: displayName || undefined, adminEmail, developerStand,
+      });
       onJob(r.jobId); onClose();
-      setSlug(''); setDisplayName(''); setAdminEmail('');
+      setSlug(''); setDisplayName(''); setAdminEmail(''); setDeveloperStand(false);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -140,6 +144,13 @@ function NewTenant({ opened, onClose, onJob }: { opened: boolean; onClose: () =>
         <TextInput label="Display name" placeholder="ACME Ltd" value={displayName} onChange={(e) => setDisplayName(e.currentTarget.value)} disabled={busy} />
         <TextInput label="Administrator e-mail" description="Gets the sign-in invitation" placeholder="ops@acme.com"
           value={adminEmail} onChange={(e) => setAdminEmail(e.currentTarget.value)} disabled={busy} />
+        <Switch
+          label="Developer stand"
+          description="Your own inventory: Zulo product models stay editable. Leave off for a customer."
+          checked={developerStand}
+          onChange={(e) => setDeveloperStand(e.currentTarget.checked)}
+          disabled={busy}
+        />
         <Text size="xs" c="dimmed">
           The slug is claimed immediately; the database, container and first boot happen on a worker and take a few
           minutes. Watch it on the progress bar.

@@ -62,7 +62,8 @@ public sealed class TenantProvisioner
     /// than a row that turns Failed a minute later.
     /// </summary>
     public async Task<Tenant> RegisterAsync(
-        string slug, string? displayName, string adminEmail, string? imageTag, string? plan, CancellationToken ct = default)
+        string slug, string? displayName, string adminEmail, string? imageTag, string? plan,
+        bool developerStand = false, CancellationToken ct = default)
     {
         slug = slug.Trim().ToLowerInvariant();
         if (!IsValidSlug(slug))
@@ -85,6 +86,7 @@ public sealed class TenantProvisioner
             Status = TenantStatus.Provisioning,
             // A key per tenant: a token minted for one is meaningless to any other.
             JwtSigningKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48)),
+            DeveloperStand = developerStand,
         };
         _db.Tenants.Add(tenant);
         await _db.SaveChangesAsync(ct);
