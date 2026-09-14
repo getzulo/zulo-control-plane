@@ -47,11 +47,11 @@ public sealed class TenantStatBreakdownTests
             ["mapped_file"] = 5,
             ["file_mapped"] = 5,
             ["pgfault"] = 999,
-            ["anon"] = 0,
+            ["anon"] = 80,
         };
 
         var parts = TenantStatBreakdown.FromCgroup(stats);
-        Assert.Equal(["RSS", "Page cache", "Mapped files"], parts.Select(p => p.Name));
-        Assert.Equal([100L, 20L, 5L], parts.Select(p => p.Bytes));
+        Assert.Equal(["RSS", "App heap", "Page cache", "Mapped files"], parts.Select(p => p.Name));
+        Assert.Equal([100L, 80L, 20L, 5L], parts.Select(p => p.Bytes));
     }
 }

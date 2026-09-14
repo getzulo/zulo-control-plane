@@ -22,7 +22,8 @@ public static class TenantStatBreakdown
     internal static readonly (string Key, string Label)[] MemoryKeys =
     [
         ("rss", "RSS"),
-        ("anon", "Anonymous"),
+        // cgroup v2 "anon" is heap/stacks/JIT — not a process named Anonymous.
+        ("anon", "App heap"),
         ("cache", "Page cache"),
         ("file", "File cache"),
         ("swap", "Swap"),

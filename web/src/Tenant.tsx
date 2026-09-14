@@ -312,7 +312,9 @@ export function TenantPage() {
               <>
                 <Text fw={600} mt="md" mb={4}>Memory</Text>
                 <Text size="xs" c="dimmed" mb="xs">
-                  cgroup counters. The meter above subtracts page cache, same as <Code>docker stats</Code>.
+                  cgroup counters. App heap is the tenant <Code>dotnet</Code> process
+                  (GC + JIT + stacks), not a second program. The meter subtracts page cache,
+                  same as <Code>docker stats</Code>.
                 </Text>
                 <Table withRowBorders={false} verticalSpacing={4} fz="xs">
                   <Table.Tbody>
