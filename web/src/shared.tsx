@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Code, CopyButton, Group, Progress, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ActionIcon, Badge, Code, CopyButton, Group, Progress, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { IconRefresh } from '@tabler/icons-react';
 import { api, type Health, type Job } from './api';
 
 /**
@@ -88,35 +89,107 @@ export const ROLE_LABEL: Record<string, string> = {
 
 export const ROLE_ORDER = ['postgres', 'etcd', 'mongo', 'app', 'panel', 'ci', 'host'];
 
+type RefreshFn = () => void | Promise<void>;
+
+const RefreshCtx = createContext<{
+  register: (fn: RefreshFn) => () => void;
+  refresh: () => Promise<void>;
+  busy: boolean;
+}>({
+  register: () => () => {},
+  refresh: async () => {},
+  busy: false,
+});
+
 /**
- * Polls while the tab is visible.
+ * One refresh for the whole shell. Pages register via {@link usePoll}; the
+ * header button calls them. A full reload is the wrong tool — it drops drafts,
+ * scrolls and open drawers, and the data is already fetched in pieces.
+ */
+export function RefreshProvider({ children }: { children: ReactNode }) {
+  const subs = useRef(new Set<RefreshFn>());
+  const [busy, setBusy] = useState(false);
+
+  const register = useCallback((fn: RefreshFn) => {
+    subs.current.add(fn);
+    return () => { subs.current.delete(fn); };
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      await Promise.allSettled([...subs.current].map((fn) => Promise.resolve(fn())));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return <RefreshCtx.Provider value={{ register, refresh, busy }}>{children}</RefreshCtx.Provider>;
+}
+
+/** Header control: refetch whatever the open page is watching, no reload. */
+export function RefreshButton() {
+  const { refresh, busy } = useContext(RefreshCtx);
+  return (
+    <Tooltip label="Refresh this screen — does not reload the panel">
+      <ActionIcon
+        variant="subtle" color="gray" loading={busy}
+        onClick={() => { void refresh(); }}
+        aria-label="Refresh this screen"
+      >
+        <IconRefresh size={17} />
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
+/**
+ * Polls while the tab is visible, and runs again when the header Refresh
+ * button is clicked.
  *
  * An operations panel is left open for hours on a second monitor, and a plain
  * setInterval keeps hitting the API from a tab nobody is looking at. Pausing on
  * hidden and refreshing immediately on return costs one listener and means the
  * numbers are current the moment the tab is looked at again.
+ *
+ * <c>ms &lt;= 0</c> means mount + manual only — Settings, where a background
+ * poll would wipe a draft the operator is still typing.
  */
 export function usePoll(fn: () => void | Promise<void>, ms = 10_000) {
   const saved = useRef(fn);
+  const inflight = useRef(false);
+  const { register } = useContext(RefreshCtx);
   // Updated in an EFFECT, not during render. Writing to a ref while rendering is
   // a side effect in the render phase, which React is free to run twice or discard.
   useEffect(() => { saved.current = fn; });
+
+  const run = useCallback(() => {
+    if (inflight.current) return Promise.resolve();
+    inflight.current = true;
+    return Promise.resolve(saved.current()).finally(() => { inflight.current = false; });
+  }, []);
+
+  useEffect(() => register(run), [register, run]);
+
   useEffect(() => {
     let timer: number | undefined;
-    const tick = () => { if (!document.hidden) void saved.current(); };
-    const start = () => { stop(); timer = window.setInterval(tick, ms); };
+    const tick = () => { if (!document.hidden) run(); };
+    const start = () => {
+      stop();
+      if (ms > 0) timer = window.setInterval(tick, ms);
+    };
     const stop = () => { if (timer) window.clearInterval(timer); timer = undefined; };
 
     const onVisibility = () => {
       if (document.hidden) stop();
-      else { void saved.current(); start(); }
+      else { run(); start(); }
     };
 
-    void saved.current();
+    run();
     start();
     document.addEventListener('visibilitychange', onVisibility);
     return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
-  }, [ms]);
+  }, [ms, run]);
 }
 
 /**

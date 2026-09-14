@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert, Autocomplete, Badge, Button, Card, Code, Group, Loader, NumberInput, Stack, Switch, Text,
   TextInput, Title, Tooltip,
 } from '@mantine/core';
 import { IconAlertTriangle, IconArrowBackUp, IconDeviceFloppy } from '@tabler/icons-react';
 import { api, type SettingDef, type SettingGroup } from './api';
+import { usePoll } from './shared';
 
 const SOURCE_LABEL: Record<SettingDef['source'], { text: string; color: string; hint: string }> = {
   Database: { text: 'set here', color: 'blue', hint: 'Overridden in this panel. Revert to fall back to cp.env.' },
@@ -36,7 +37,8 @@ export function SettingsPage() {
     } catch (e) { setError((e as Error).message); }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  // Mount + the header Refresh. A timer would wipe a draft still being typed.
+  usePoll(refresh, 0);
 
   const dirty = useMemo(() => Object.keys(draft), [draft]);
 

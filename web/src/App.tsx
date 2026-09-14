@@ -9,7 +9,7 @@ import {
   IconNotes, IconPackage, IconPackages, IconServer2, IconSettings, IconSun,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
-import { BuildStamp } from './shared';
+import { BuildStamp, RefreshButton, RefreshProvider } from './shared';
 import { OverviewPage, ActivityPage } from './Overview';
 import { TenantsPage } from './Tenants';
 import { TenantPage } from './Tenant';
@@ -48,11 +48,13 @@ function ColorSchemeToggle() {
   );
 }
 
-export default function App() {  const auth = useAuth();
+export default function App() {
+  const auth = useAuth();
   const [opened, { toggle, close }] = useDisclosure();
   const location = useLocation();
 
   return (
+    <RefreshProvider>
     <AppShell
       header={{ height: 56 }}
       navbar={{ width: 232, breakpoint: 'sm', collapsed: { mobile: !opened } }}
@@ -74,6 +76,7 @@ export default function App() {  const auth = useAuth();
                 {auth.ctx.email ?? 'signed in'} · {auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}
               </Text>
             )}
+            <RefreshButton />
             <ColorSchemeToggle />
             {auth.ctx?.mode === 'local' && (
               <UnstyledButton onClick={() => void auth.signOut()} title="Sign out">
@@ -131,5 +134,6 @@ export default function App() {  const auth = useAuth();
         </Routes>
       </AppShell.Main>
     </AppShell>
+    </RefreshProvider>
   );
 }

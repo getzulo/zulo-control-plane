@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Switch, Table, Tabs,
@@ -47,6 +47,8 @@ export function TenantPage() {
   // Upgrade and password reset, both driven from here rather than from another
   // screen — this is the page somebody is on when they need either.
   const [running, setRunning] = useState<Awaited<ReturnType<typeof api.running>> | null>(null);
+  const [statsAt, setStatsAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [upgrading, setUpgrading] = useState(false);
   const [releases, setReleases] = useState<ImageTag[]>([]);
   const [targetImage, setTargetImage] = useState<string | null>(null);
@@ -95,13 +97,23 @@ export function TenantPage() {
 
   usePoll(refresh, 10_000);
 
-  // Separate and slower. Reading stats costs about a second — a real CPU
-  // percentage needs two samples from the Docker stats stream — so it must not sit
-  // in the path that keeps the rest of the page current.
+  // Separate from the rest of the page: a real CPU percentage needs two Docker
+  // samples ~1s apart. Five seconds is live enough to watch a spike; the header
+  // Refresh runs it immediately.
   usePoll(useCallback(async () => {
-    try { setStats(await api.stats(id)); } catch { /* shown as unavailable below */ }
+    try {
+      const next = await api.stats(id);
+      setStats(next);
+      setStatsAt(Date.now());
+    } catch { /* shown as unavailable below */ }
     try { setRunning(await api.running(id)); } catch { /* likewise */ }
-  }, [id]), 20_000);
+  }, [id]), 5_000);
+
+  useEffect(() => {
+    if (statsAt == null) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [statsAt]);
 
   const act = async (fn: () => Promise<unknown>) => {
     try { await fn(); void refresh(); } catch (e) { setError((e as Error).message); }
@@ -243,10 +255,20 @@ export function TenantPage() {
         <Alert color="yellow" p="xs"><Text size="xs">Some statistics could not be read — {stats.error}</Text></Alert>
       )}
 
-      {stats?.container && (
+      {(stats?.container || statsAt != null) && (
         <Text size="xs" c="dimmed">
-          Up since {fmt(stats.container.startedAt)} · {stats.container.restartCount} restarts ·
-          {' '}net {fmtBytes(stats.container.networkRxBytes)} in / {fmtBytes(stats.container.networkTxBytes)} out
+          {statsAt != null && (
+            <>
+              Live · {now - statsAt < 4000 ? 'just now' : `${Math.round((now - statsAt) / 1000)}s ago`}
+              {stats?.container ? ' · ' : ''}
+            </>
+          )}
+          {stats?.container && (
+            <>
+              Up since {fmt(stats.container.startedAt)} · {stats.container.restartCount} restarts ·
+              {' '}net {fmtBytes(stats.container.networkRxBytes)} in / {fmtBytes(stats.container.networkTxBytes)} out
+            </>
+          )}
         </Text>
       )}
 
