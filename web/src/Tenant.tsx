@@ -250,6 +250,111 @@ export function TenantPage() {
         </Text>
       )}
 
+      {(stats?.container?.processes?.length || stats?.container?.memory?.length
+        || stats?.database?.tables?.length || stats?.database?.sessions?.length) ? (
+        <SimpleGrid cols={{ base: 1, md: 2 }}>
+          <Card withBorder padding="md">
+            <Text fw={600} mb={4}>Processes</Text>
+            <Text size="xs" c="dimmed" mb="xs">
+              Host <Code>ps</Code> in this container. One row is normal — a tenant is a single process.
+            </Text>
+            {stats?.container?.processes?.length ? (
+              <Table withRowBorders={false} verticalSpacing={4} fz="xs">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>PID</Table.Th>
+                    <Table.Th>CPU</Table.Th>
+                    <Table.Th>RSS</Table.Th>
+                    <Table.Th>Up</Table.Th>
+                    <Table.Th>Command</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {stats.container.processes.map((p) => (
+                    <Table.Tr key={`${p.pid}-${p.command}`}>
+                      <Table.Td><Code>{p.pid || '—'}</Code></Table.Td>
+                      <Table.Td>{p.cpuPercent.toFixed(1)}%</Table.Td>
+                      <Table.Td>{p.rssBytes ? fmtBytes(p.rssBytes) : '—'}</Table.Td>
+                      <Table.Td c="dimmed">{p.elapsed ?? '—'}</Table.Td>
+                      <Table.Td>
+                        <Text size="xs" lineClamp={1} title={p.command} ff="monospace">{p.command}</Text>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            ) : (
+              <Text size="xs" c="dimmed">No process list from this host.</Text>
+            )}
+            {!!stats?.container?.memory?.length && (
+              <>
+                <Text fw={600} mt="md" mb={4}>Memory</Text>
+                <Text size="xs" c="dimmed" mb="xs">
+                  cgroup counters. The meter above subtracts page cache, same as <Code>docker stats</Code>.
+                </Text>
+                <Table withRowBorders={false} verticalSpacing={4} fz="xs">
+                  <Table.Tbody>
+                    {stats.container.memory.map((m) => (
+                      <Table.Tr key={m.name}>
+                        <Table.Td c="dimmed">{m.name}</Table.Td>
+                        <Table.Td>{fmtBytes(m.bytes)}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </>
+            )}
+          </Card>
+          <Card withBorder padding="md">
+            <Text fw={600} mb={4}>Largest tables</Text>
+            {stats?.database?.tables?.length ? (
+              <Table withRowBorders={false} verticalSpacing={4} fz="xs">
+                <Table.Tbody>
+                  {stats.database.tables.map((t) => (
+                    <Table.Tr key={t.name}>
+                      <Table.Td><Code>{t.name}</Code></Table.Td>
+                      <Table.Td>{fmtBytes(t.bytes)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            ) : (
+              <Text size="xs" c="dimmed">No table sizes.</Text>
+            )}
+            <Text fw={600} mt="md" mb={4}>Connections</Text>
+            {stats?.database?.sessions?.length ? (
+              <Table withRowBorders={false} verticalSpacing={4} fz="xs">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>User</Table.Th>
+                    <Table.Th>State</Table.Th>
+                    <Table.Th>For</Table.Th>
+                    <Table.Th>Query</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {stats.database.sessions.map((s, i) => (
+                    <Table.Tr key={`${s.user}-${s.state}-${i}`}>
+                      <Table.Td>
+                        <Text size="xs">{s.user}</Text>
+                        <Text size="xs" c="dimmed">{s.application}</Text>
+                      </Table.Td>
+                      <Table.Td>{s.state}</Table.Td>
+                      <Table.Td c="dimmed">{s.seconds == null ? '—' : `${s.seconds}s`}</Table.Td>
+                      <Table.Td>
+                        <Text size="xs" lineClamp={1} title={s.query ?? ''} ff="monospace">{s.query || '—'}</Text>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            ) : (
+              <Text size="xs" c="dimmed">No backends in this database.</Text>
+            )}
+          </Card>
+        </SimpleGrid>
+      ) : null}
+
       <Grid>
         <Grid.Col span={{ base: 12, md: 6 }}>
           <Card withBorder padding="md" h="100%">
@@ -260,19 +365,25 @@ export function TenantPage() {
                 <Table.Tr>
                   <Table.Td c="dimmed">Running</Table.Td>
                   <Table.Td>
-                    {/* What the container REPORTS, beside the tag pinned in the
-                        registry. They disagree when a container was replaced
-                        outside the panel, and that gap is worth seeing. */}
-                    {!running ? '—' : !running.reachable ? (
-                      <Badge color="red" variant="light">not answering</Badge>
-                    ) : (
+                    {!running ? '—' : (
                       <Group gap={6}>
-                        <Code>{running.version}{running.build ? ` · ${running.build}` : ''}</Code>
+                        <Code>{running.containerImage ?? '—'}</Code>
+                        {!running.reachable && (
+                          <Badge color="red" variant="light">not answering</Badge>
+                        )}
                         {running.matchesPinned === false && (
                           <Badge color="orange" variant="light">differs from the pinned tag</Badge>
                         )}
                       </Group>
                     )}
+                  </Table.Td>
+                </Table.Tr>
+                <Table.Tr>
+                  <Table.Td c="dimmed">Binary</Table.Td>
+                  <Table.Td>
+                    {!running || !running.reachable
+                      ? '—'
+                      : <Code>{running.version}{running.build ? ` · ${running.build}` : ''}</Code>}
                   </Table.Td>
                 </Table.Tr>
                 <Table.Tr><Table.Td c="dimmed">Container</Table.Td><Table.Td><Code>{tenant.containerId ?? '—'}</Code></Table.Td></Table.Tr>

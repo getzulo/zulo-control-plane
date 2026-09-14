@@ -249,6 +249,8 @@ export interface TenantStats {
     state: string;
     networkRxBytes: number;
     networkTxBytes: number;
+    processes?: { pid: number; cpuPercent: number; memoryPercent: number; rssBytes: number; elapsed?: string | null; command: string }[];
+    memory?: { name: string; bytes: number }[];
   } | null;
   database?: {
     sizeBytes: number;
@@ -257,6 +259,8 @@ export interface TenantStats {
     tableCount: number;
     largestTableBytes?: number | null;
     largestTableName?: string | null;
+    tables?: { name: string; bytes: number }[];
+    sessions?: { user: string; application: string; state: string; seconds?: number | null; query?: string | null }[];
   } | null;
   /** Set when one half could not be read; the other half is still returned. */
   error?: string | null;
@@ -540,10 +544,11 @@ export const api = {
 
   stats: (id: string) => request<TenantStats>(`/api/tenants/${id}/stats`),
 
-  /** What the container REPORTS, as opposed to the tag pinned in the registry. */
+  /** Daemon image vs the pin; /health version is the binary, not the tag. */
   running: (id: string) => request<{
     reachable: boolean; version?: string | null; build?: string | null;
-    startedUtc?: string | null; pinnedImage: string; matchesPinned?: boolean; error?: string;
+    startedUtc?: string | null; pinnedImage: string; containerImage?: string | null;
+    matchesPinned?: boolean | null; error?: string;
   }>(`/api/tenants/${id}/running`),
 
   tenantUsers: (id: string) =>

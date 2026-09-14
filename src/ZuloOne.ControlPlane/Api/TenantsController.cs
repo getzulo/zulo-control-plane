@@ -349,10 +349,14 @@ public class TenantsController : ControllerBase
     }
 
     /// <summary>
-    /// What the tenant's container actually REPORTS, as opposed to the tag pinned
-    /// in the registry. The two disagree when a container was replaced outside the
-    /// panel, and that gap is worth seeing rather than assuming away.
+    /// What the tenant is actually running: the container's image (the pin
+    /// comparison), plus what <c>/health</c> reports (assembly + commit).
     /// </summary>
+    /// <remarks>
+    /// <c>matchesPinned</c> is the daemon's image against <see cref="Tenant.ImageTag"/>.
+    /// A release is a new tag on the same digest, so the binary version from
+    /// <c>/health</c> is not the pin and must not be compared to it.
+    /// </remarks>
     [HttpGet("{id:guid}/running")]
     public async Task<IActionResult> Running(
         Guid id, [FromServices] IHttpClientFactory http, CancellationToken ct)
@@ -360,28 +364,41 @@ public class TenantsController : ControllerBase
         var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
         if (tenant is null) return NotFound(new { error = "Tenant not found", id });
 
+        var container = await _containers.TryGetRunningImageAsync(tenant.ContainerId, ct);
+        string? pinnedId = null;
+        if (container is not null)
+            pinnedId = await _containers.TryGetImageIdAsync(tenant.ImageTag, ct);
+        bool? matchesPinned = container is null
+            ? null
+            : ImagePin.Matches(tenant.ImageTag, container.Name, container.Id, pinnedId);
+
         try
         {
             using var client = http.CreateClient("tenant");
             var body = await client.GetStringAsync($"https://{_containers.HostFor(tenant.Slug)}/health", ct);
             using var doc = System.Text.Json.JsonDocument.Parse(body);
             var root = doc.RootElement;
-            var version = root.TryGetProperty("version", out var v) ? v.GetString() : null;
             return Ok(new
             {
                 reachable = true,
-                version,
+                version = root.TryGetProperty("version", out var v) ? v.GetString() : null,
                 build = root.TryGetProperty("build", out var b) ? b.GetString() : null,
                 startedUtc = root.TryGetProperty("startedUtc", out var s) ? s.GetString() : null,
                 pinnedImage = tenant.ImageTag,
-                // The pinned tag ends in the version the image was built with, so a
-                // mismatch means the running container is not what the registry says.
-                matchesPinned = version is not null && tenant.ImageTag.EndsWith($":{version}", StringComparison.Ordinal),
+                containerImage = container?.Name,
+                matchesPinned,
             });
         }
         catch (Exception ex)
         {
-            return Ok(new { reachable = false, error = ex.Message, pinnedImage = tenant.ImageTag });
+            return Ok(new
+            {
+                reachable = false,
+                error = ex.Message,
+                pinnedImage = tenant.ImageTag,
+                containerImage = container?.Name,
+                matchesPinned,
+            });
         }
     }
 

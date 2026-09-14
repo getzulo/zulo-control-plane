@@ -20,7 +20,9 @@ public sealed record ContainerStats(
     int RestartCount,
     string State,
     long NetworkRxBytes,
-    long NetworkTxBytes);
+    long NetworkTxBytes,
+    IReadOnlyList<ContainerProcess> Processes,
+    IReadOnlyList<MemoryPart> Memory);
 
 public sealed record DatabaseStats(
     long SizeBytes,
@@ -28,7 +30,9 @@ public sealed record DatabaseStats(
     int MaxConnections,
     int TableCount,
     long? LargestTableBytes,
-    string? LargestTableName);
+    string? LargestTableName,
+    IReadOnlyList<TableSize> Tables,
+    IReadOnlyList<DbSession> Sessions);
 
 /// <summary>
 /// Live resource use for one tenant: the container from the Docker API, the
@@ -142,6 +146,14 @@ public sealed class TenantStatsService
             tx += (long)n.TxBytes;
         }
 
+        IReadOnlyList<ContainerProcess> processes = [];
+        try { processes = await ReadProcessesAsync(containerId, ct); }
+        catch (Exception ex)
+        {
+            // A missing `ps` must not hide the meters the rest of this method already has.
+            _logger.LogWarning(ex, "Could not list processes in {Container}", containerId);
+        }
+
         return new ContainerStats(
             Math.Round(cpu, 2),
             Math.Max(0, used),
@@ -157,7 +169,35 @@ public sealed class TenantStatsService
                 : null,
             (int)inspect.RestartCount,
             inspect.State?.Status ?? "unknown",
-            rx, tx);
+            rx, tx,
+            processes,
+            TenantStatBreakdown.FromCgroup(last?.MemoryStats.Stats));
+    }
+
+    /// <summary>
+    /// Host <c>ps</c> in the container's PID namespace — the same view as
+    /// <c>docker top</c>. Custom columns first; plain <c>-ef</c> if that host
+    /// does not speak the POSIX format.
+    /// </summary>
+    private async Task<IReadOnlyList<ContainerProcess>> ReadProcessesAsync(string containerId, CancellationToken ct)
+    {
+        try
+        {
+            var top = await _docker.Containers.ListProcessesAsync(
+                containerId,
+                new ContainerListProcessesParameters { PsArgs = "-eo pid,pcpu,pmem,rss,etime,args" },
+                ct);
+            var parsed = TenantStatBreakdown.ParseProcesses(top.Titles, top.Processes);
+            if (parsed.Count > 0) return parsed;
+        }
+        catch (DockerApiException)
+        {
+            // Fall through to the portable columns.
+        }
+
+        var fallback = await _docker.Containers.ListProcessesAsync(
+            containerId, new ContainerListProcessesParameters { PsArgs = "-ef" }, ct);
+        return TenantStatBreakdown.ParseProcesses(fallback.Titles, fallback.Processes);
     }
 
     private async Task<DatabaseStats> ReadDatabaseAsync(Registry.Tenant tenant, CancellationToken ct)
@@ -171,8 +211,8 @@ public sealed class TenantStatsService
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(ct);
 
-        // One round trip. Each of these is cheap on its own, but the panel reads
-        // them per tenant on a page that may show several.
+        // One round trip, three result sets: the meters, then the tables and
+        // sessions that explain them.
         const string sql = """
             SELECT pg_database_size(current_database()),
                    (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()),
@@ -185,19 +225,60 @@ public sealed class TenantStatsService
                    (SELECT c.relname FROM pg_class c
                      JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public' AND c.relkind = 'r'
-                    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 1)
+                    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 1);
+
+            SELECT c.relname, pg_total_relation_size(c.oid)
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'public' AND c.relkind = 'r'
+             ORDER BY 2 DESC
+             LIMIT 8;
+
+            SELECT coalesce(usename, '?'),
+                   coalesce(nullif(application_name, ''), '—'),
+                   coalesce(state, '?'),
+                   extract(epoch from (now() - coalesce(xact_start, query_start, backend_start)))::int,
+                   left(regexp_replace(query, '\s+', ' ', 'g'), 80)
+              FROM pg_stat_activity
+             WHERE datname = current_database()
+             ORDER BY backend_start
+             LIMIT 16
             """;
 
         await using var cmd = new NpgsqlCommand(sql, connection);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("No statistics returned.");
 
+        var size = reader.GetInt64(0);
+        var connections = reader.GetInt32(1);
+        var maxConnections = reader.GetInt32(2);
+        var tableCount = reader.GetInt32(3);
+        var largestBytes = reader.IsDBNull(4) ? (long?)null : reader.GetInt64(4);
+        var largestName = reader.IsDBNull(5) ? null : reader.GetString(5);
+
+        var tables = new List<TableSize>();
+        if (await reader.NextResultAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                tables.Add(new TableSize(reader.GetString(0), reader.GetInt64(1)));
+        }
+
+        var sessions = new List<DbSession>();
+        if (await reader.NextResultAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                sessions.Add(new DbSession(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+        }
+
         return new DatabaseStats(
-            reader.GetInt64(0),
-            reader.GetInt32(1),
-            reader.GetInt32(2),
-            reader.GetInt32(3),
-            reader.IsDBNull(4) ? null : reader.GetInt64(4),
-            reader.IsDBNull(5) ? null : reader.GetString(5));
+            size, connections, maxConnections, tableCount, largestBytes, largestName,
+            tables, sessions);
     }
 }

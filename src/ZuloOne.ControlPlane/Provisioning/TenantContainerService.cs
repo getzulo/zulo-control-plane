@@ -8,6 +8,9 @@ namespace ZuloOne.ControlPlane.Provisioning;
 /// <summary>An image as the daemon reports it, narrowed to one repository.</summary>
 public sealed record DaemonImage(string Id, IReadOnlyList<string> Tags, DateTime Created, long Size);
 
+/// <summary>What a running container was started from.</summary>
+public sealed record RunningImage(string? Name, string? Id);
+
 /// <summary>
 /// Runs, stops and removes tenant containers, and stamps them with the Traefik
 /// labels that publish the subdomain. The container publishes NO ports: Traefik
@@ -200,6 +203,57 @@ public sealed class TenantContainerService
         await _docker.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
         _logger.LogInformation("Started container {Container} for tenant {Slug} at {Host}", created.ID[..12], tenant.Slug, host);
         return created.ID;
+    }
+
+    /// <summary>
+    /// The image the daemon says this container was started from — name at
+    /// create time, and the image id. Null when there is no container.
+    /// </summary>
+    public async Task<RunningImage?> TryGetRunningImageAsync(string? containerId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(containerId)) return null;
+        try
+        {
+            var inspect = await _docker.Containers.InspectContainerAsync(containerId, ct);
+            return new RunningImage(inspect.Config?.Image, inspect.Image);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            return null;
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not inspect the image of container {Container}.", containerId);
+            return null;
+        }
+    }
+
+    /// <summary>The daemon's image id for a tag, or null when it is not here.</summary>
+    public async Task<string?> TryGetImageIdAsync(string image, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(image)) return null;
+        try
+        {
+            var inspect = await _docker.Images.InspectImageAsync(image, ct);
+            return inspect.ID;
+        }
+        catch (DockerImageNotFoundException)
+        {
+            return null;
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not inspect image {Image}.", image);
+            return null;
+        }
     }
 
     /// <summary>
