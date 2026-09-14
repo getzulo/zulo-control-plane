@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Stack, Table, Text, TextInput, Title,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowsExchange, IconDatabase } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowsExchange, IconDatabase, IconEraser } from '@tabler/icons-react';
 import { api, type Cluster, type InfraNode } from './api';
 import { CHECK_COLOR, ROLE_COLOR, ROLE_LABEL, ROLE_ORDER, ago, usePoll } from './shared';
 
@@ -29,6 +29,7 @@ export function InfrastructurePage() {
   const [switchTo, setSwitchTo] = useState<InfraNode | null>(null);
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pruning, setPruning] = useState<string | null>(null);
 
   usePoll(async () => {
     try { setCluster(await api.cluster()); setError(null); }
@@ -147,6 +148,23 @@ export function InfrastructurePage() {
                           <Button size="xs" variant="default" disabled={!m.selfCheckReport} onClick={() => setReport(m)}>
                             Self-check report
                           </Button>
+                          {(role === 'ci' || role === 'app') && (
+                            <Button
+                              size="xs" variant="light" leftSection={<IconEraser size={14} />}
+                              loading={pruning === m.name}
+                              disabled={m.prunePending || m.selfCheck === 'stale' || m.selfCheck === 'never'}
+                              onClick={async () => {
+                                setPruning(m.name);
+                                try {
+                                  await api.pruneNode(m.name);
+                                  setCluster(await api.cluster());
+                                } catch (e) { setError((e as Error).message); }
+                                finally { setPruning(null); }
+                              }}
+                            >
+                              {m.prunePending ? 'Prune queued' : 'Prune Docker'}
+                            </Button>
+                          )}
                           {replica && (
                             <Button
                               size="xs" color="grape" variant="light" leftSection={<IconArrowsExchange size={14} />}

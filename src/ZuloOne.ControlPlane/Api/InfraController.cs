@@ -54,12 +54,13 @@ public class InfraController : ControllerBase
     private readonly SettingsStore _store;
     private readonly IJobQueue _queue;
     private readonly ClusterBackupGate _backups;
+    private readonly NodePruneGate _prunes;
     private readonly ILogger<InfraController> _logger;
 
     public InfraController(
         ControlPlaneDbContext db, PatroniClient patroni,
         IOptions<PatroniSettings> settings, SettingsStore store,
-        IJobQueue queue, ClusterBackupGate backups,
+        IJobQueue queue, ClusterBackupGate backups, NodePruneGate prunes,
         ILogger<InfraController> logger)
     {
         _db = db;
@@ -68,6 +69,7 @@ public class InfraController : ControllerBase
         _store = store;
         _queue = queue;
         _backups = backups;
+        _prunes = prunes;
         _logger = logger;
     }
 
@@ -84,6 +86,7 @@ public class InfraController : ControllerBase
         var now = DateTime.UtcNow;
         var expected = InfraRoles.ParseExpected(_store.List("Infra:ExpectedNodes"));
         var members = cluster?.Members ?? [];
+        var prunePending = new HashSet<string>(_prunes.PendingNames(), StringComparer.OrdinalIgnoreCase);
 
         object DescribeMember(PatroniMember m)
         {
@@ -118,7 +121,7 @@ public class InfraController : ControllerBase
             reachable = cluster is not null,
             scope = cluster?.Scope,
             members = members.Select(DescribeMember),
-            nodes = MergeNodes(members, reports, expected, stale, now),
+            nodes = MergeNodes(members, reports, expected, stale, now, prunePending),
             // Nodes that report but are not Patroni members — the etcd witness, for
             // one. Without this they would simply be invisible.
             unmatchedReports = reports
@@ -175,6 +178,43 @@ public class InfraController : ControllerBase
     }
 
     /// <summary>
+    /// Asks a Docker host (CI or the app VM) to drop unused build cache on its
+    /// next health check. The panel cannot run docker on that machine.
+    /// </summary>
+    [HttpPost("nodes/{name}/prune")]
+    public async Task<IActionResult> Prune(string name, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return BadRequest(new { error = "A node name is required." });
+
+        var row = await _db.NodeHealth.AsNoTracking()
+            .FirstOrDefaultAsync(n => n.Node == name, ct);
+        var role = row is null
+            ? InfraRoles.Infer(name)
+            : (string.IsNullOrWhiteSpace(row.Role) ? InfraRoles.Infer(name) : InfraRoles.Normalize(row.Role));
+        if (role is not "ci" and not "app")
+            return BadRequest(new { error = $"'{name}' is '{role}' — only the CI and app hosts keep a Docker build cache." });
+
+        if (row is null)
+            return Conflict(new { error = $"'{name}' has never reported, so the request has nowhere to go." });
+
+        var staleAfter = TimeSpan.FromMinutes(Math.Max(1, _settings.ReportStaleAfterMinutes));
+        if (DateTime.UtcNow - row.ReceivedAt > staleAfter)
+            return Conflict(new
+            {
+                error = $"{name} last reported at {row.ReceivedAt:u} and is stale. "
+                    + "Prune waits for that check. On the host: docker builder prune -af",
+            });
+
+        if (!_prunes.TryRequest(name))
+            return Conflict(new { error = $"A prune is already waiting for {name}." });
+
+        _logger.LogInformation("Operator {Operator} asked {Node} to prune Docker cache",
+            OperatorIdentity.Describe(User), name);
+        return Accepted(new { queued = true, node = name });
+    }
+
+    /// <summary>
     /// Patroni members, anyone who has reported, and names we were told to expect.
     /// Silence on an expected name is a card of its own — otherwise Mongo never
     /// appearing looks the same as "we do not watch Mongo".
@@ -184,7 +224,8 @@ public class InfraController : ControllerBase
         List<NodeHealth> reports,
         IReadOnlyList<(string Name, string Role)> expected,
         TimeSpan stale,
-        DateTime now)
+        DateTime now,
+        IReadOnlySet<string> prunePending)
     {
         var byName = new Dictionary<string, NodeView>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, role) in expected)
@@ -234,6 +275,7 @@ public class InfraController : ControllerBase
                 timeline = n.Timeline,
                 lag = n.Lag,
                 lsn = n.Lsn,
+                prunePending = prunePending.Contains(n.Name),
             })
             .ToList();
     }
@@ -417,6 +459,7 @@ public class InfraController : ControllerBase
         // copies discard the body; claiming here would consume the request into
         // nothing, and the button would look like it worked.
         object? backup = null;
+        object? prune = null;
         if (Request.Headers["X-Node-Commands"].Count > 0)
         {
             var claimed = _backups.Claim(node);
@@ -427,9 +470,15 @@ public class InfraController : ControllerBase
                     claimed.Type, node, claimed.RequestedBy ?? "unknown");
                 backup = new { type = claimed.Type };
             }
+
+            if (_prunes.Claim(node))
+            {
+                _logger.LogInformation("Handing a Docker prune to {Node}", node);
+                prune = new { run = true };
+            }
         }
 
-        return Ok(new { received = true, backup });
+        return Ok(new { received = true, backup, prune });
     }
 
     /// <summary>

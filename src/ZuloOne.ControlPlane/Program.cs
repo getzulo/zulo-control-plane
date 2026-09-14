@@ -124,6 +124,7 @@ builder.Services.AddScoped<IJobHandler, RecreateJobHandler>();
 builder.Services.AddScoped<IJobHandler, PruneJobHandler>();
 builder.Services.AddScoped<IJobHandler, RegistrySnapshotJobHandler>();
 builder.Services.AddSingleton<ClusterBackupGate>();
+builder.Services.AddSingleton<NodePruneGate>();
 builder.Services.AddScoped<IJobHandler, BackupJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
 // Only ENQUEUES: a registry dump, then a prune. Both run through the queue, so

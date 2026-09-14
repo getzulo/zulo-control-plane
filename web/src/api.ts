@@ -203,6 +203,8 @@ export interface InfraNode {
   timeline?: number | null;
   lag?: number | null;
   lsn?: string | null;
+  /** Set while a Prune Docker click is waiting for this node's next health check. */
+  prunePending?: boolean;
 }
 
 export interface Cluster {
@@ -594,6 +596,11 @@ export const api = {
     request<{ jobId: string }>('/api/infra/backup', {
       method: 'POST', body: JSON.stringify({ type }),
     }),
+
+  /** Asks CI or the app host to drop unused Docker build cache on its next check. */
+  pruneNode: (name: string) =>
+    request<{ queued: boolean; node: string }>(
+      `/api/infra/nodes/${encodeURIComponent(name)}/prune`, { method: 'POST' }),
 
   // ------------------------------------------------------------- snapshots ---
   snapshots: (tenantId?: string) =>
