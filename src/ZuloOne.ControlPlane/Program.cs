@@ -123,6 +123,8 @@ builder.Services.AddScoped<IJobHandler, CompileModelsJobHandler>();
 builder.Services.AddScoped<IJobHandler, RecreateJobHandler>();
 builder.Services.AddScoped<IJobHandler, PruneJobHandler>();
 builder.Services.AddScoped<IJobHandler, RegistrySnapshotJobHandler>();
+builder.Services.AddSingleton<ClusterBackupGate>();
+builder.Services.AddScoped<IJobHandler, BackupJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
 // Only ENQUEUES: a registry dump, then a prune. Both run through the queue, so
 // they inherit the one-at-a-time execution that keeps a delete away from a dump

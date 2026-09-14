@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Infra;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Registry;
 using ZuloOne.ControlPlane.Settings;
 
@@ -35,6 +36,9 @@ public record NodeReportRequest(
 /// <summary>Which node should take the leader role.</summary>
 public record SwitchoverRequest(string Candidate, string ConfirmNode);
 
+/// <summary>Ad-hoc pgBackRest: <c>incr</c> (default), <c>diff</c> or <c>full</c>.</summary>
+public record ClusterBackupRequestBody(string? Type);
+
 /// <summary>
 /// The cluster underneath the fleet: who leads, who is behind, what each node says
 /// about itself, and the one lever worth exposing — handing over the leader role.
@@ -48,16 +52,22 @@ public class InfraController : ControllerBase
     private readonly PatroniClient _patroni;
     private readonly PatroniSettings _settings;
     private readonly SettingsStore _store;
+    private readonly IJobQueue _queue;
+    private readonly ClusterBackupGate _backups;
     private readonly ILogger<InfraController> _logger;
 
     public InfraController(
         ControlPlaneDbContext db, PatroniClient patroni,
-        IOptions<PatroniSettings> settings, SettingsStore store, ILogger<InfraController> logger)
+        IOptions<PatroniSettings> settings, SettingsStore store,
+        IJobQueue queue, ClusterBackupGate backups,
+        ILogger<InfraController> logger)
     {
         _db = db;
         _patroni = patroni;
         _settings = settings.Value;
         _store = store;
+        _queue = queue;
+        _backups = backups;
         _logger = logger;
     }
 
@@ -118,8 +128,36 @@ public class InfraController : ControllerBase
             // The CLUSTER's backups, as distinct from the panel's per-tenant dumps.
             // These are what a lost machine is recovered from, and they were
             // invisible here until the node started sending its inventory along.
-            backups = SummariseBackups(reports, stale, now),
+            backups = SummariseBackups(reports, stale, now, _backups.Peek()),
         });
+    }
+
+    /// <summary>
+    /// Asks the repository node to take a pgBackRest backup on its next health
+    /// check. The panel cannot run that command itself — the repository is a
+    /// directory on that machine.
+    /// </summary>
+    [HttpPost("backup")]
+    public async Task<IActionResult> Backup([FromBody] ClusterBackupRequestBody? request, CancellationToken ct)
+    {
+        var type = ClusterBackupGate.NormalizeType(request?.Type);
+        if (type is null)
+            return BadRequest(new { error = "Type must be incr, diff or full." });
+
+        var already = await _db.Jobs.AnyAsync(
+            j => j.Kind == JobKind.Backup && (j.State == JobState.Queued || j.State == JobState.Running), ct);
+        if (already || _backups.Peek() is not null)
+            return Conflict(new { error = "A cluster backup is already waiting for the repository node." });
+
+        var holder = await _db.NodeHealth.AsNoTracking()
+            .FirstOrDefaultAsync(n => n.BackupsJson != null && n.BackupsJson != "", ct);
+        if (holder is null)
+            return Conflict(new { error = "No node has reported a backup repository yet. The request has nowhere to go." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Backup, tenantId: null, tenantSlug: null,
+            new BackupPayload(type, holder.Node), OperatorIdentity.Of(User), ct);
+        return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
     }
 
     /// <summary>
@@ -210,10 +248,24 @@ public class InfraController : ControllerBase
     /// Flattens pgBackRest's inventory into what an operator checks: how old the
     /// newest backup is, and whether anything is wrong with the stanza.
     /// </summary>
-    private static object? SummariseBackups(List<NodeHealth> reports, TimeSpan stale, DateTime now)
+    private static object? SummariseBackups(
+        List<NodeHealth> reports, TimeSpan stale, DateTime now, ClusterBackupRequest? pending)
     {
         var holder = reports.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r.BackupsJson));
-        if (holder is null) return null;
+        if (holder is null)
+        {
+            // A request with nowhere to land still has to be visible — otherwise the
+            // button looks like it did nothing.
+            return pending is null ? null : new
+            {
+                node = pending.TargetNode,
+                count = 0,
+                backups = Array.Empty<object>(),
+                asOf = pending.RequestedAt,
+                asOfStale = false,
+                pending = DescribePending(pending),
+            };
+        }
 
         try
         {
@@ -256,15 +308,32 @@ public class InfraController : ControllerBase
                 // last five-minute run — say so rather than imply this is live.
                 asOf = holder.ReceivedAt,
                 asOfStale = now - holder.ReceivedAt > stale,
+                pending = DescribePending(pending),
             };
         }
         catch
         {
             // A shape we cannot read is not a reason to fail the whole page; the
             // node's text report is still shown beside it.
-            return null;
+            return pending is null ? null : new
+            {
+                node = holder.Node,
+                count = 0,
+                backups = Array.Empty<object>(),
+                asOf = holder.ReceivedAt,
+                asOfStale = now - holder.ReceivedAt > stale,
+                pending = DescribePending(pending),
+            };
         }
     }
+
+    private static object? DescribePending(ClusterBackupRequest? pending) =>
+        pending is null ? null : new
+        {
+            type = pending.Type,
+            requestedAt = pending.RequestedAt,
+            targetNode = pending.TargetNode,
+        };
 
     /// <summary>
     /// Where a database node publishes its five-minute self-check.
@@ -329,7 +398,24 @@ public class InfraController : ControllerBase
         row.ReceivedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
-        return Ok(new { received = true });
+
+        // Only a script that opted in is given the command. Older check-cluster.sh
+        // copies discard the body; claiming here would consume the request into
+        // nothing, and the button would look like it worked.
+        object? backup = null;
+        if (Request.Headers["X-Node-Commands"].Count > 0)
+        {
+            var claimed = _backups.Claim(node);
+            if (claimed is not null)
+            {
+                _logger.LogInformation(
+                    "Handing a {Type} cluster backup to {Node} (asked by {By})",
+                    claimed.Type, node, claimed.RequestedBy ?? "unknown");
+                backup = new { type = claimed.Type };
+            }
+        }
+
+        return Ok(new { received = true, backup });
     }
 
     /// <summary>

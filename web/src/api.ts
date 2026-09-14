@@ -231,6 +231,8 @@ export interface ClusterBackups {
   backups: { label: string; type: string; stopped: string; sizeBytes: number }[];
   asOf: string;
   asOfStale: boolean;
+  /** Set while the repository node has not yet picked up a Backup now click. */
+  pending?: { type: string; requestedAt: string; targetNode?: string | null } | null;
 }
 
 /** What one tenant is using right now, container and database. */
@@ -586,6 +588,12 @@ export const api = {
   switchover: (candidate: string, confirmNode: string) =>
     request<{ success: boolean; from: string; to: string; detail: string }>(
       '/api/infra/switchover', { method: 'POST', body: JSON.stringify({ candidate, confirmNode }) }),
+
+  /** Asks the repository node to run pgBackRest on its next health check. */
+  clusterBackup: (type: 'incr' | 'diff' | 'full' = 'incr') =>
+    request<{ jobId: string }>('/api/infra/backup', {
+      method: 'POST', body: JSON.stringify({ type }),
+    }),
 
   // ------------------------------------------------------------- snapshots ---
   snapshots: (tenantId?: string) =>

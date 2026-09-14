@@ -3,7 +3,7 @@ import {
   ActionIcon, Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select,
   Stack, Table, Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
-import { IconAlertTriangle, IconArrowBackUp, IconEraser, IconRestore, IconTrash } from '@tabler/icons-react';
+import { IconAlertTriangle, IconArrowBackUp, IconDatabaseExport, IconEraser, IconRestore, IconTrash } from '@tabler/icons-react';
 import { api, type Cluster, type SettingGroup, type Snapshot, type SnapshotList, type Tenant } from './api';
 import { JobProgress, fmt, fmtBytes, useJob, usePoll } from './shared';
 
@@ -31,6 +31,8 @@ export function SnapshotsPage() {
   const [note, setNote] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Snapshot | null>(null);
+  const [backupType, setBackupType] = useState<string>('incr');
+  const [backing, setBacking] = useState(false);
 
   const job = useJob(jobId);
 
@@ -65,6 +67,15 @@ export function SnapshotsPage() {
     } catch (e) { setError((e as Error).message); }
   };
 
+  const takeCluster = async () => {
+    const type = backupType === 'diff' || backupType === 'full' ? backupType : 'incr';
+    setBacking(true);
+    try {
+      setJobId((await api.clusterBackup(type)).jobId);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBacking(false); }
+  };
+
   const restore = async (s: Snapshot) => {
     try { setJobId((await api.restoreSnapshot(s.id)).jobId); }
     catch (e) { setError((e as Error).message); }
@@ -94,14 +105,45 @@ export function SnapshotsPage() {
       <Grid>
         <Grid.Col span={{ base: 12, md: 7 }}>
           <Card withBorder padding="md" h="100%">
-            <Group justify="space-between" mb="xs">
-              <Text fw={600}>Cluster backups (pgBackRest)</Text>
-              {cluster?.backups && (
-                <Badge variant="light" color={cluster.backups.status === 'ok' ? 'green' : 'red'}>
-                  {cluster.backups.status ?? 'unknown'}
-                </Badge>
-              )}
+            <Group justify="space-between" mb="xs" wrap="wrap">
+              <Group gap="xs">
+                <Text fw={600}>Cluster backups (pgBackRest)</Text>
+                {cluster?.backups && (
+                  <Badge variant="light" color={cluster.backups.status === 'ok' ? 'green' : 'red'}>
+                    {cluster.backups.status ?? 'unknown'}
+                  </Badge>
+                )}
+              </Group>
+              <Group gap={6}>
+                <Select
+                  size="xs" w={140} allowDeselect={false}
+                  data={[
+                    { value: 'incr', label: 'Incremental' },
+                    { value: 'diff', label: 'Differential' },
+                    { value: 'full', label: 'Full' },
+                  ]}
+                  value={backupType} onChange={(v) => setBackupType(v ?? 'incr')}
+                  disabled={backing || Boolean(cluster?.backups?.pending)}
+                />
+                <Button
+                  size="xs" variant="light" leftSection={<IconDatabaseExport size={14} />}
+                  loading={backing} disabled={Boolean(cluster?.backups?.pending)}
+                  onClick={() => void takeCluster()}
+                >
+                  Backup now
+                </Button>
+              </Group>
             </Group>
+            {cluster?.backups?.pending && (
+              <Alert color="blue" mb="xs" p="xs">
+                <Text size="xs">
+                  {cluster.backups.pending.type} backup waiting for{' '}
+                  <b>{cluster.backups.pending.targetNode ?? 'the repository node'}</b>
+                  {' '}— it runs on that node's next health check (up to 5 minutes). If this
+                  sits longer, deploy the current <Code>check-cluster.sh</Code> on that host.
+                </Text>
+              </Alert>
+            )}
             {!cluster?.backups ? (
               <Text size="sm" c="dimmed">
                 No node has reported an inventory. Only the machine holding the repository can, and it sends it with

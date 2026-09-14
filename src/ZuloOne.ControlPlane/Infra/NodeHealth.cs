@@ -53,8 +53,8 @@ public class NodeHealth
     ///
     /// Carried on the health report rather than fetched, because only this machine
     /// can answer — the repository is a directory on its disk — and it is already
-    /// talking every five minutes. Building a channel to run one command would have
-    /// been the larger change.
+    /// talking every five minutes. The same reply is how the panel asks for an
+    /// ad-hoc backup: see <see cref="ClusterBackupGate"/>.
     ///
     /// Stored as raw JSON: pgBackRest's shape varies across versions (this one has
     /// no <c>repository.size</c>, only <c>delta</c> and <c>size-map</c>), and a
