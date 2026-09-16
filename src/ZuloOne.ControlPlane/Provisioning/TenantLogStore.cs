@@ -64,8 +64,19 @@ public sealed class TenantLogStore
     {
         if (_client is null) return tenants.Select(MissingRow).ToList();
 
-        var names = await _client.ListDatabaseNamesAsync(ct);
-        var existing = new HashSet<string>(await names.ToListAsync(ct), StringComparer.Ordinal);
+        HashSet<string> existing;
+        try
+        {
+            var names = await _client.ListDatabaseNamesAsync(ct);
+            existing = new HashSet<string>(await names.ToListAsync(ct), StringComparer.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            // Same contract as StatusAsync: the Logs page stays up when mongod is
+            // down. An uncaught timeout here was a 500 on GET /api/logs/tenants.
+            _logger.LogWarning(ex, "Mongo journal is configured but not reachable");
+            return tenants.Select(MissingRow).ToList();
+        }
 
         var rows = new List<LogTenantRowDto>(tenants.Count);
         foreach (var tenant in tenants)
