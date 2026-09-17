@@ -4,7 +4,7 @@ import {
   Stack, Table, Text, TextInput, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import {
-  IconAlertTriangle, IconChevronDown, IconChevronRight, IconDownload, IconHammer, IconPackage, IconRocket,
+  IconAlertTriangle, IconChevronDown, IconChevronRight, IconDownload, IconHammer, IconPackage, IconRocket, IconTrash,
 } from '@tabler/icons-react';
 import { api, type ModelCatalogue } from './api';
 import { JobProgress, inputChecked, useJob, usePoll } from './shared';
@@ -33,6 +33,18 @@ function stillRequired(name: string, selected: string[], catalogue: CatalogueMod
   return others.filter((s) => expandSelection([s], catalogue).some((x) => x.toLowerCase() === name.toLowerCase()));
 }
 
+function installedDependents(name: string, tenant: CatalogueTenant, catalogue: CatalogueModel[]): string[] {
+  const installed = new Set(
+    tenant.installed.filter((m) => !m.isSystem).map((m) => m.name.toLowerCase()),
+  );
+  return catalogue
+    .filter((c) =>
+      !c.isSystem
+      && c.dependsOn.some((d) => d.toLowerCase() === name.toLowerCase())
+      && installed.has(c.model.toLowerCase()))
+    .map((c) => c.model);
+}
+
 export function ModelsPage() {
   const [data, setData] = useState<ModelCatalogue | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +58,8 @@ export function ModelsPage() {
   const [installing, setInstalling] = useState<CatalogueTenant | null>(null);
   const [installImage, setInstallImage] = useState<string | null>(null);
   const [installModels, setInstallModels] = useState<string[]>([]);
+  const [removing, setRemoving] = useState<{ tenant: CatalogueTenant; model: string } | null>(null);
+  const [removeConfirm, setRemoveConfirm] = useState('');
   const job = useJob(jobId);
 
   const refresh = useCallback(async () => {
@@ -96,6 +110,18 @@ export function ModelsPage() {
       });
       setJobId(r.jobId);
       setInstalling(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function uninstall() {
+    if (!removing) return;
+    try {
+      const r = await api.uninstallModels(removing.tenant.id, removing.model);
+      setJobId(r.jobId);
+      setRemoving(null);
+      setRemoveConfirm('');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -260,7 +286,12 @@ export function ModelsPage() {
                     {open && (
                       <Table.Tr className="zo-models-detail">
                         <Table.Td colSpan={8} p={0}>
-                          <TenantModelsDetail tenant={t} catalogue={models} onInstall={openInstall} />
+                          <TenantModelsDetail
+                            tenant={t}
+                            catalogue={models}
+                            onInstall={openInstall}
+                            onRemove={(model) => { setRemoving({ tenant: t, model }); setRemoveConfirm(''); }}
+                          />
                         </Table.Td>
                       </Table.Tr>
                     )}
@@ -412,6 +443,37 @@ export function ModelsPage() {
         </Stack>
       </Modal>
 
+      <Modal
+        opened={Boolean(removing)}
+        onClose={() => { setRemoving(null); setRemoveConfirm(''); }}
+        title={`Remove ${removing?.model ?? ''} from ${removing?.tenant.slug ?? ''}`}
+        size="lg">
+        <Stack gap="md">
+          <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+            Cascade: metadata, extension fields on other objects, scripts, menus, and
+            the physical tables. A snapshot is taken first — that file is the only
+            undo, because the container does not change. Core and the tenant stand
+            model cannot be removed this way.
+          </Alert>
+          <TextInput
+            label={`Type "${removing?.model ?? ''}" to confirm`}
+            value={removeConfirm}
+            onChange={(e) => setRemoveConfirm(e.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => { setRemoving(null); setRemoveConfirm(''); }}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              disabled={!removing || removeConfirm !== removing.model}
+              onClick={() => void uninstall()}>
+              Remove {removing?.model}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
       <Modal opened={planning} onClose={() => setPlanning(false)} title="Roll out image" size="lg">
         <Stack gap="md">
           <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
@@ -450,10 +512,12 @@ function TenantModelsDetail({
   tenant,
   catalogue,
   onInstall,
+  onRemove,
 }: {
   tenant: CatalogueTenant;
   catalogue: CatalogueModel[];
   onInstall: (tenant: CatalogueTenant, preset?: string[]) => void;
+  onRemove: (model: string) => void;
 }) {
   const rows = tenant.installed.filter((m) => !m.isSystem);
   return (
@@ -484,11 +548,22 @@ function TenantModelsDetail({
             <Table.Th>Latest</Table.Th>
             <Table.Th>Depends on</Table.Th>
             <Table.Th>Compile</Table.Th>
+            <Table.Th />
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
           {rows.map((m) => {
             const deps = catalogue.find((c) => c.model.toLowerCase() === m.name.toLowerCase())?.dependsOn ?? [];
+            const holders = installedDependents(m.name, tenant, catalogue);
+            const stand = (m.metaId ?? '').toLowerCase() === '7e2c1f0a-9b4d-4e6a-8c3f-1d5a7b9e2c40'
+              || m.name.toLowerCase() === 'local'
+              || m.name.toLowerCase() === 'tenant';
+            const blocked = holders.length > 0 || stand;
+            const tip = stand
+              ? 'The tenant stand model cannot be deleted'
+              : holders.length > 0
+                ? `First remove ${holders.join(', ')}`
+                : `Remove ${m.name} from this tenant`;
             return (
               <Table.Tr key={m.name}>
                 <Table.Td>
@@ -511,12 +586,24 @@ function TenantModelsDetail({
                       </Tooltip>
                     : <Text size="xs" c="dimmed">—</Text>}
                 </Table.Td>
+                <Table.Td>
+                  <Tooltip label={tip}>
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      disabled={blocked}
+                      aria-label={`Remove ${m.name}`}
+                      onClick={() => onRemove(m.name)}>
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Table.Td>
               </Table.Tr>
             );
           })}
           {rows.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={5}>
+              <Table.Td colSpan={6}>
                 <Text size="sm" c="dimmed">No business models installed.</Text>
               </Table.Td>
             </Table.Tr>
@@ -526,3 +613,4 @@ function TenantModelsDetail({
     </Stack>
   );
 }
+

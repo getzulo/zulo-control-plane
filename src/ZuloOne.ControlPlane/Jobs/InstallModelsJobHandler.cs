@@ -119,6 +119,12 @@ public sealed class InstallModelsJobHandler : IJobHandler
         }
 
         await context.LogAsync($"Installed: {result.Created} created, {result.Updated} updated.", ct);
+        if (result.Errors.Count > 0)
+        {
+            await context.LogAsync(
+                "Import remarks (per-model; siblings that compiled are still stamped): "
+                + string.Join(" | ", result.Errors.Take(8)), ct);
+        }
 
         // Recorded so the next recreate installs the same set. Without this the tenant
         // would quietly revert to the fleet default the first time its container was
@@ -130,15 +136,22 @@ public sealed class InstallModelsJobHandler : IJobHandler
             await _db.SaveChangesAsync(ct);
         }
 
+        var relevant = ModelGraph.ProblemsFor(result.CompilationProblems, wanted);
+        if (relevant.Count > 0)
+        {
+            // Installed is not the same as working. The models that compiled are
+            // stamped; these names in the install set did not compile.
+            throw new InvalidOperationException(
+                $"The models installed into {tenant.Slug} but {relevant.Count} of the requested set did not compile: "
+                + string.Join(" | ", relevant.Take(5))
+                + $". Snapshot {snapshot.FileName} predates the install.");
+        }
+
         if (result.CompilationProblems.Count > 0)
         {
-            // Installed is not the same as working. The models are in place and the
-            // tenant is serving; saying this plainly is the difference between finding
-            // it now and hearing it from a user.
-            throw new InvalidOperationException(
-                $"The models installed into {tenant.Slug} but {result.CompilationProblems.Count} did not compile: "
-                + string.Join(" | ", result.CompilationProblems.Take(5))
-                + $". Snapshot {snapshot.FileName} predates the install.");
+            await context.LogAsync(
+                "Other models still do not compile (not in this install): "
+                + string.Join(" | ", result.CompilationProblems.Take(5)), ct);
         }
 
         await context.StepAsync($"{tenant.Slug} has the models and is still serving", 100, ct);

@@ -135,6 +135,7 @@ public class ModelsController : ControllerBase
                     offers,
                     latest,
                     outdated,
+                    metaId = m.MetaId,
                 };
             }).ToList();
             var missing = latestByName.Keys
@@ -240,6 +241,63 @@ public class ModelsController : ControllerBase
             OperatorIdentity.Of(User), ct);
 
         return Accepted($"/api/jobs/{job.Id}", new { jobId = job.Id });
+    }
+
+    /// <summary>Which model to cascade-delete from one running tenant.</summary>
+    public sealed record UninstallRequest(string Model);
+
+    /// <summary>
+    /// Removes a model from a tenant that keeps serving. No container is recreated.
+    /// </summary>
+    /// <remarks>
+    /// Incoming dependents refuse before a snapshot is taken. Core and the seeded
+    /// stand model are refused. The snapshot taken for the job is the only undo.
+    /// </remarks>
+    [HttpPost("/api/tenants/{id:guid}/uninstall-models")]
+    public async Task<IActionResult> Uninstall(Guid id, [FromBody] UninstallRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tenant is null) return NotFound(new { error = "Tenant not found", id });
+        if (string.IsNullOrWhiteSpace(tenant.DatabasePassword))
+            return BadRequest(new { error = $"'{tenant.Slug}' has no stored database password, so it cannot be snapshotted — and an uninstall with no way back is not one." });
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+            return BadRequest(new { error = $"'{tenant.Slug}' has no signing key, so the panel cannot authenticate to it." });
+
+        var name = request.Model?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+            return BadRequest(new { error = "Name the model to remove." });
+        if (StandModel.IsShippedName(name))
+            return BadRequest(new { error = $"'{name}' is the tenant's own stand model and cannot be deleted." });
+
+        var (installed, error) = await _tenantModels.ReadAsync(tenant, ct);
+        if (error is not null)
+            return UnprocessableEntity(new { error });
+        var row = installed.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+            return BadRequest(new { error = $"'{name}' is not installed on '{tenant.Slug}'." });
+        if (row.IsSystem)
+            return BadRequest(new { error = $"'{row.Name}' is a system model and cannot be deleted." });
+        if (StandModel.IsMetaId(row.MetaId.ToString()))
+            return BadRequest(new { error = $"'{row.Name}' is the tenant's own stand model and cannot be deleted." });
+
+        var (dependents, depError) = await _tenantModels.ReadDependentsAsync(tenant, row.MetaId, ct);
+        if (depError is not null)
+            return UnprocessableEntity(new { error = depError });
+        if (dependents.Count > 0)
+        {
+            return Conflict(new
+            {
+                error = $"Cannot remove {row.Name}: {string.Join(", ", dependents)} still depend on it.",
+                dependentModels = dependents,
+            });
+        }
+
+        var uninstallJob = await _queue.EnqueueAsync(
+            JobKind.UninstallModels, tenant.Id, tenant.Slug,
+            new UninstallModelsPayload(row.Name),
+            OperatorIdentity.Of(User), ct);
+
+        return Accepted($"/api/jobs/{uninstallJob.Id}", new { jobId = uninstallJob.Id });
     }
 
     /// <summary>

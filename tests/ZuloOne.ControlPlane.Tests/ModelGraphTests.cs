@@ -77,6 +77,27 @@ public sealed class ModelGraphTests
     }
 
     [Fact]
+    public void DirectDependents_is_one_hop_not_the_cone()
+    {
+        var graph = ModelGraph.Parse([
+            ("Common/model.json", CommonJson),
+            ("Core/model.json", CoreJson),
+            ("Purchasing/model.json", PurchasingJson),
+            ("Inventory/model.json", InventoryJson),
+        ]).ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+
+        var onCommon = ModelGraph.DirectDependents("Common", graph);
+        Assert.Contains("Inventory", onCommon);
+        Assert.Contains("Purchasing", onCommon);
+        Assert.DoesNotContain("Common", onCommon);
+
+        var onInventory = ModelGraph.DirectDependents("Inventory", graph);
+        Assert.Equal(["Purchasing"], onInventory);
+
+        Assert.Empty(ModelGraph.DirectDependents("Purchasing", graph));
+    }
+
+    [Fact]
     public void Parse_records_extension_targets_as_extends_not_depends()
     {
         var accounting = """
@@ -205,6 +226,25 @@ public sealed class ModelGraphTests
         Assert.True(ModelGraph.CompilesOk("Success"));
         Assert.True(ModelGraph.CompilesOk(null));
         Assert.False(ModelGraph.CompilesOk("Failed"));
+    }
+
+    [Fact]
+    public void ProblemsFor_ignores_siblings_outside_the_install_set()
+    {
+        string[] problems =
+        [
+            "LocalizationSaudiArabia: Failed CS0246",
+            "LocalizationUkraine: DependencyFailed",
+        ];
+
+        var ofFive = ModelGraph.ProblemsFor(problems, ["Costing", "HR", "Organization", "Production", "Tax"]);
+        Assert.Empty(ofFive);
+
+        var ofUkraine = ModelGraph.ProblemsFor(problems, ["LocalizationUkraine", "Inventory", "Sales"]);
+        Assert.Equal(["LocalizationUkraine: DependencyFailed"], ofUkraine);
+
+        var everything = ModelGraph.ProblemsFor(problems, []);
+        Assert.Equal(2, everything.Count);
     }
 
     [Fact]

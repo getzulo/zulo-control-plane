@@ -5,6 +5,7 @@ Fleet management dashboard and provisioning API for multi-tenant ZuloOne deploym
 - **API** (.NET) — provisions, upgrades, monitors, backs up, and deletes tenants
 - **Dashboard** (React) — fleet table, new-tenant wizard, per-tenant actions, health roll-up
 - **Registry** (Postgres DB) — tenant state, versions, health
+- **Models** — install into a running tenant, or cascade-delete one (snapshot first; dependents block)
 
 See [`docs/ControlPlane.Deployment.md`](../zulo.one/docs/architecture/ControlPlane.Deployment.md) in the main repo for architecture.
 

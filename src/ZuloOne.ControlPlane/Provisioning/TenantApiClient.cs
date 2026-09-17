@@ -172,6 +172,109 @@ public sealed class TenantApiClient
         }
     }
 
+    /// <summary>What the tenant reported back from a cascade delete.</summary>
+    public sealed record TenantDeleteModelResult(
+        bool Succeeded,
+        int Status,
+        IReadOnlyList<string> DependentModels,
+        string? Error,
+        int RowsDeleted,
+        IReadOnlyList<string> DroppedTables);
+
+    /// <summary>
+    /// Cascade-deletes one model on a RUNNING tenant. The token is the same
+    /// <c>control-plane</c> Administrator the install uses; Core opens
+    /// <c>PlatformInstallScope</c> for that name so a Zulo product model can
+    /// actually leave.
+    /// </summary>
+    public async Task<TenantDeleteModelResult> DeleteModelAsync(
+        Tenant tenant, Guid modelId, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+        {
+            return new TenantDeleteModelResult(false, 0, [],
+                "The registry holds no signing key for this tenant, so the panel cannot authenticate to it.",
+                0, []);
+        }
+
+        var host = _containers.HostFor(tenant.Slug);
+        var url = $"https://{host}/api/metadata/models/{modelId}";
+        using var client = _http.CreateClient("tenant");
+        client.Timeout = timeout;
+        using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintToken(tenant));
+
+        try
+        {
+            using var response = await client.SendAsync(request, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
+            var status = (int)response.StatusCode;
+
+            if (status == 409)
+            {
+                var names = ParseDependentNames(body);
+                return new TenantDeleteModelResult(false, status, names,
+                    names.Count > 0
+                        ? $"First remove {string.Join(", ", names)}."
+                        : Trim(body),
+                    0, []);
+            }
+
+            if (status is < 200 or >= 300)
+            {
+                return new TenantDeleteModelResult(false, status, [],
+                    $"{status} from {host}: {Trim(body)}", 0, []);
+            }
+
+            return ParseDelete(body, status);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Deleting a model on {Slug} failed.", tenant.Slug);
+            return new TenantDeleteModelResult(false, 0, [], $"Could not reach {host}: {ex.Message}", 0, []);
+        }
+    }
+
+    private static TenantDeleteModelResult ParseDelete(string body, int status)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var tables = root.TryGetProperty("droppedTables", out var t) && t.ValueKind == JsonValueKind.Array
+                ? t.EnumerateArray().Select(x => x.ToString()).ToList()
+                : [];
+            var rows = root.TryGetProperty("rowsDeleted", out var r) && r.TryGetInt32(out var n) ? n : 0;
+            return new TenantDeleteModelResult(true, status, [], null, rows, tables);
+        }
+        catch (JsonException)
+        {
+            return new TenantDeleteModelResult(false, status, [], $"Unreadable delete answer: {Trim(body)}", 0, []);
+        }
+    }
+
+    private static List<string> ParseDependentNames(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("dependentModels", out var list)
+                && list.ValueKind == JsonValueKind.Array)
+            {
+                return list.EnumerateArray()
+                    .Select(x => x.GetString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Cast<string>()
+                    .ToList();
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall through: the caller still has the raw body.
+        }
+        return [];
+    }
+
     private static TenantInstallResult ParseCompile(string body, string url)
     {
         try

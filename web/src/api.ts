@@ -150,6 +150,8 @@ export type JobKind =
   | 'CompileModels'
   /** Recreate the container so boot env (developer stand) applies. */
   | 'Recreate'
+  /** Cascade-delete one model from a tenant that keeps running. */
+  | 'UninstallModels'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
   | 'Prune'
   /** Dump of the panel's OWN database — the record of which container belongs to whom. */
@@ -343,6 +345,7 @@ export interface ModelCatalogue {
       offers?: string | null;
       latest?: string | null;
       outdated: boolean;
+      metaId?: string;
     }[];
     missing: { name: string; version: string }[];
   }[];
@@ -698,6 +701,16 @@ export const api = {
   installModels: (tenantId: string, body: { imageTag?: string | null; models: string[] }) =>
     request<{ jobId: string }>(`/api/tenants/${tenantId}/install-models`, {
       method: 'POST', body: JSON.stringify(body),
+    }),
+
+  /**
+   * Cascade-deletes one model from a RUNNING tenant — no container recreate.
+   * The snapshot taken first is the only undo. Refused while other installed
+   * models still depend on it.
+   */
+  uninstallModels: (tenantId: string, model: string) =>
+    request<{ jobId: string }>(`/api/tenants/${tenantId}/uninstall-models`, {
+      method: 'POST', body: JSON.stringify({ model }),
     }),
 
   /** Schema sync, entity types, then scripts. Does not push a tree. */

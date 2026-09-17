@@ -92,6 +92,13 @@ public enum JobKind
     /// is picked up. No model tree is pushed.
     /// </summary>
     Recreate,
+
+    /// <summary>
+    /// Cascade-delete one model from a running tenant. Snapshot first — the
+    /// container is not recreated, so that file is the only undo. Incoming
+    /// dependents refuse the job; Core and the seeded stand model are refused.
+    /// </summary>
+    UninstallModels,
 }
 
 /// <summary>

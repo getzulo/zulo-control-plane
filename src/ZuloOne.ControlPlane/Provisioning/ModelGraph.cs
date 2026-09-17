@@ -50,6 +50,43 @@ public static class ModelGraph
     }
 
     /// <summary>
+    /// Models that declare a direct dependency on <paramref name="name"/>.
+    /// Same grain as Core's 409: one hop, not the transitive cone.
+    /// </summary>
+    public static List<string> DirectDependents(
+        string name,
+        IReadOnlyDictionary<string, ModelGraphNode> graph)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return [];
+        return graph.Values
+            .Where(n => n.DependsOn.Any(d => string.Equals(d, name, StringComparison.OrdinalIgnoreCase)))
+            .Select(n => n.Name)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Compile problems that belong to a named install set. A pre-existing
+    /// Failed sibling (country pack, stand model) must not fail a job that
+    /// installed Inventory. Empty <paramref name="modelNames"/> means the
+    /// whole catalogue was requested — every problem counts.
+    /// </summary>
+    public static List<string> ProblemsFor(
+        IEnumerable<string> problems,
+        IReadOnlyCollection<string> modelNames)
+    {
+        var list = problems.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (modelNames.Count == 0) return list;
+        var set = new HashSet<string>(modelNames, StringComparer.OrdinalIgnoreCase);
+        return list.Where(p =>
+        {
+            var colon = p.IndexOf(':');
+            var problemName = (colon < 0 ? p : p[..colon]).Trim();
+            return set.Contains(problemName);
+        }).ToList();
+    }
+
+    /// <summary>
     /// Reads a workspace tree into named nodes. Install dependencies come from
     /// <c>model.json</c> only (<c>metaId</c>, then the <c>Name-&gt;DependsOn</c>
     /// convention). Extensions of another model's objects are recorded on
