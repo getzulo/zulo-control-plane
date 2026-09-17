@@ -100,6 +100,12 @@ public sealed class TenantApiClient
 
             if (!response.IsSuccessStatusCode)
             {
+                // Old Core 422'd the whole tree after MinVersion against a stale
+                // AsNoTracking snapshot — Created/Updated in the body are real.
+                // Parse them so the job can name the models instead of dumping JSON.
+                var parsed = Parse(body, url);
+                if (parsed.Created > 0 || parsed.Updated > 0 || parsed.Errors.Count > 0)
+                    return parsed with { Succeeded = false };
                 return new TenantInstallResult(false, 0, 0,
                     [$"{(int)response.StatusCode} from {host}: {Trim(body)}"], [], url);
             }
