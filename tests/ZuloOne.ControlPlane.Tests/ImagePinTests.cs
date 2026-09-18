@@ -55,4 +55,45 @@ public sealed class ImagePinTests
     [Fact]
     public void Distribution_repository_is_null_when_the_fleet_is_not_a_core_pin()
         => Assert.Null(ImagesController.DistributionRepository("zuloone"));
+
+    [Fact]
+    public void ResolveDeleteRepository_hits_the_dist_repo_when_the_full_image_says_so()
+        => Assert.Equal("zuloone", ImagesController.ResolveDeleteRepository(
+            "zuloone-core", "2026.0.69", "10.10.0.210:5000/zuloone:2026.0.69"));
+
+    [Fact]
+    public void ResolveDeleteRepository_hits_the_platform_repo_when_the_full_image_says_so()
+        => Assert.Equal("zuloone-core", ImagesController.ResolveDeleteRepository(
+            "zuloone-core", "2026.0.69", "10.10.0.210:5000/zuloone-core:2026.0.69"));
+
+    [Fact]
+    public void ResolveDeleteRepository_rejects_a_tag_mismatch()
+        => Assert.Null(ImagesController.ResolveDeleteRepository(
+            "zuloone-core", "2026.0.69", "10.10.0.210:5000/zuloone:2026.0.50"));
+
+    [Fact]
+    public void ResolveDeleteRepository_rejects_a_foreign_repository()
+        => Assert.Null(ImagesController.ResolveDeleteRepository(
+            "zuloone-core", "2026.0.69", "10.10.0.210:5000/other:2026.0.69"));
+
+    [Fact]
+    public void DistKeepWindow_keeps_commit_siblings_of_the_newest_packs()
+    {
+        var digests = new Dictionary<string, string?>
+        {
+            ["2026.0.69"] = "d69",
+            ["sha-aaa"] = "d69",
+            ["2026.0.68"] = "d68",
+            ["sha-bbb"] = "d68",
+            ["2026.0.50"] = "d50",
+            ["sha-ccc"] = "d50",
+        };
+        var keep = ImagesController.DistKeepWindow(digests.Keys.ToList(), digests, keep: 2);
+        Assert.Contains("2026.0.69", keep);
+        Assert.Contains("sha-aaa", keep);
+        Assert.Contains("2026.0.68", keep);
+        Assert.Contains("sha-bbb", keep);
+        Assert.DoesNotContain("2026.0.50", keep);
+        Assert.DoesNotContain("sha-ccc", keep);
+    }
 }

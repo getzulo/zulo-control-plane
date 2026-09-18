@@ -318,7 +318,7 @@ export function ImagesPage() {
             <Button color="red" disabled={confirm !== remove?.tag}
               onClick={async () => {
                 const r = remove!; setRemove(null);
-                try { await api.removeImage(r.tag); await refresh(); }
+                try { await api.removeImage(r.tag, r.image); await refresh(); }
                 catch (e) { setError((e as Error).message); }
               }}
             >

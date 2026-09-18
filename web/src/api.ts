@@ -666,12 +666,15 @@ export const api = {
       `/api/settings/${encodeURIComponent(key)}`, { method: 'DELETE' }),
 
   /**
-   * Removes the MANIFEST, so every tag on it goes. The API refuses when any of
-   * those names is in use, is the fleet default, or is in the unused-release window.
+   * Removes the MANIFEST, so every tag on it goes. Pass the full image when
+   * deleting a distribution pack — the same 2026.0.N exists on zuloone-core.
    */
-  removeImage: (tag: string) =>
-    request<{ success: boolean; digest: string; removed: string[]; note: string }>(
-      `/api/images/${encodeURIComponent(tag)}?confirmTag=${encodeURIComponent(tag)}`, { method: 'DELETE' }),
+  removeImage: (tag: string, image?: string) => {
+    const q = new URLSearchParams({ confirmTag: tag });
+    if (image) q.set('image', image);
+    return request<{ success: boolean; digest: string; removed: string[]; note: string }>(
+      `/api/images/${encodeURIComponent(tag)}?${q}`, { method: 'DELETE' });
+  },
 
   /** Delete every unused manifest the single-delete guards would allow. */
   pruneUnusedImages: () =>

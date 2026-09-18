@@ -171,7 +171,7 @@ export function ModelsPage() {
   async function dropPack(pack: CatalogueImage) {
     setDroppingPack(true);
     try {
-      await api.removeImage(pack.tag);
+      await api.removeImage(pack.tag, pack.image);
       if (installImage === pack.image) {
         const remaining = packs.filter((p) => p.image !== pack.image);
         setInstallImage(remaining[0]?.image ?? null);
