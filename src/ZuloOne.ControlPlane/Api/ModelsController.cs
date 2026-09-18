@@ -80,6 +80,7 @@ public class ModelsController : ControllerBase
         var models = images
             .SelectMany(i => i.Models.Select(m => (i, m)))
             .Where(x => !StandModel.IsShippedName(x.m.Name))
+            .Where(x => !TestFixtureModel.IsName(x.m.Name))
             .GroupBy(x => x.m.Name, StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
             .Select(g =>
@@ -180,7 +181,7 @@ public class ModelsController : ControllerBase
                 platform = i.Platform,
                 workspace = i.WorkspaceCommit,
                 models = i.Models
-                    .Where(m => !StandModel.IsShippedName(m.Name))
+                    .Where(m => !StandModel.IsShippedName(m.Name) && !TestFixtureModel.IsName(m.Name))
                     .Select(m => new { name = m.Name, version = m.Version }).ToList(),
             }),
             tenants,
@@ -230,9 +231,11 @@ public class ModelsController : ControllerBase
             var graph = (await _trees.ReadGraphAsync(source, ct))
                 .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
             wanted = ModelGraph.Expand(wanted, graph)
-                .Where(name => !StandModel.IsShippedName(name))
+                .Where(name => !StandModel.IsShippedName(name) && !TestFixtureModel.IsName(name))
                 .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
                 .ToArray();
+            if (wanted.Length == 0)
+                return BadRequest(new { error = "TestBench and TestBenchExt are test fixtures and are not installed onto a tenant." });
         }
 
         var job = await _queue.EnqueueAsync(

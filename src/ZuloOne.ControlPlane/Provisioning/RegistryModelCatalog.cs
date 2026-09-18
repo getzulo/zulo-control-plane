@@ -153,6 +153,7 @@ public sealed class RegistryModelCatalog
             .Select(pair => pair.Split('=', 2))
             .Where(parts => parts.Length == 2 && parts[0].Length > 0)
             .Where(parts => !StandModel.IsShippedName(parts[0]))
+            .Where(parts => !TestFixtureModel.IsName(parts[0]))
             .Select(parts => new CatalogueModel(parts[0], parts[1]))
             .ToList();
 

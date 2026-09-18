@@ -96,4 +96,20 @@ public sealed class ImagePinTests
         Assert.DoesNotContain("2026.0.50", keep);
         Assert.DoesNotContain("sha-ccc", keep);
     }
+
+    [Fact]
+    public void Test_fixtures_are_not_a_product_name()
+    {
+        Assert.True(TestFixtureModel.IsName("TestBench"));
+        Assert.True(TestFixtureModel.IsName("TestBenchExt"));
+        Assert.True(TestFixtureModel.IsMetaId(TestFixtureModel.TestBenchMetaId));
+        Assert.False(TestFixtureModel.IsName("Inventory"));
+    }
+
+    [Fact]
+    public void ParseModels_drops_test_fixtures_from_image_labels()
+    {
+        var parsed = RegistryModelCatalog.ParseModels("Inventory=1.9.1,TestBench=1.0.8,TestBenchExt=1.0.0,Sales=1.18.1");
+        Assert.Equal(["Inventory", "Sales"], parsed.Select(m => m.Name).ToArray());
+    }
 }

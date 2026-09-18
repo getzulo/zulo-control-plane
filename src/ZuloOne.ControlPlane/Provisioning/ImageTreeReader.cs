@@ -260,9 +260,10 @@ public sealed class ImageTreeReader
                     var relative = name[TreeRoot.Length..];
                     if (relative.Length == 0) continue;
 
+                    var top = relative.Split('/', 2)[0];
+                    if (TestFixtureModel.IsName(top)) continue;
                     if (models is { Count: > 0 })
                     {
-                        var top = relative.Split('/', 2)[0];
                         if (!models.Contains(top, StringComparer.OrdinalIgnoreCase)) continue;
                     }
 

@@ -72,15 +72,18 @@ public sealed class InstallModelsJobHandler : IJobHandler
         var previousPin = tenant.Models;
 
         var source = string.IsNullOrWhiteSpace(payload.ImageTag) ? tenant.ImageTag : payload.ImageTag!;
-        var wanted = payload.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var requested = payload.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var wanted = requested;
         if (wanted.Count > 0)
         {
             var graph = (await _trees.ReadGraphAsync(source, ct))
                 .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
             wanted = ModelGraph.Expand(wanted, graph)
-                .Where(name => !StandModel.IsShippedName(name))
+                .Where(name => !StandModel.IsShippedName(name) && !TestFixtureModel.IsName(name))
                 .Where(name => !graph.TryGetValue(name, out var node) || !node.IsSystem)
                 .ToList();
+            if (wanted.Count == 0)
+                throw new InvalidOperationException("TestBench and TestBenchExt are test fixtures and are not installed onto a tenant.");
         }
 
         await context.StepAsync("Snapshotting — the only way back from this", 10, ct);

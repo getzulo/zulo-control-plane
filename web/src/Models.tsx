@@ -61,6 +61,11 @@ function stillRequired(name: string, selected: string[], catalogue: CatalogueMod
   return others.filter((s) => expandSelection([s], catalogue).some((x) => x.toLowerCase() === name.toLowerCase()));
 }
 
+function isTestFixture(name: string): boolean {
+  const n = name.toLowerCase();
+  return n === 'testbench' || n === 'testbenchext';
+}
+
 function installedDependents(name: string, tenant: CatalogueTenant, catalogue: CatalogueModel[]): string[] {
   const installed = new Set(
     tenant.installed.filter((m) => !m.isSystem).map((m) => m.name.toLowerCase()),
@@ -819,18 +824,28 @@ function TenantModelsDetail({
             const stand = (m.metaId ?? '').toLowerCase() === '7e2c1f0a-9b4d-4e6a-8c3f-1d5a7b9e2c40'
               || m.name.toLowerCase() === 'local'
               || m.name.toLowerCase() === 'tenant';
+            const fixture = isTestFixture(m.name);
             const blocked = holders.length > 0 || stand;
             const tip = stand
               ? 'The tenant stand model cannot be deleted'
               : holders.length > 0
                 ? `First remove ${holders.join(', ')}`
-                : `Remove ${m.name} from this tenant`;
+                : fixture
+                  ? `Remove test fixture ${m.name} from this tenant`
+                  : `Remove ${m.name} from this tenant`;
             return (
               <Table.Tr key={m.name}>
                 <Table.Td>
-                  <UnstyledButton onClick={() => onInstall(tenant, [m.name])}>
-                    <Text size="sm" fw={500}>{m.name}</Text>
-                  </UnstyledButton>
+                  {fixture ? (
+                    <Group gap={6}>
+                      <Text size="sm" fw={500}>{m.name}</Text>
+                      <Badge size="xs" color="orange">test fixture</Badge>
+                    </Group>
+                  ) : (
+                    <UnstyledButton onClick={() => onInstall(tenant, [m.name])}>
+                      <Text size="sm" fw={500}>{m.name}</Text>
+                    </UnstyledButton>
+                  )}
                 </Table.Td>
                 <Table.Td>{m.version ?? '—'}</Table.Td>
                 <Table.Td>
