@@ -22,10 +22,10 @@ public sealed record InstallModelsPayload(string? ImageTag, string[] Models);
 /// </para>
 ///
 /// <para>
-/// The snapshot is still taken, and here it matters MORE rather than less. An image
-/// move can be undone by pinning the previous tag back; this cannot — the container
-/// never changed. The snapshot is the only way out, so it is not optional and the job
-/// refuses rather than proceeding without one.
+/// The snapshot is restored automatically when the install (or its compile) fails.
+/// An image move can be undone by pinning the previous tag back; this cannot — the
+/// container never changed. The snapshot is the only way out, so it is not optional
+/// and the job refuses rather than proceeding without one.
 /// </para>
 ///
 /// <para>
@@ -40,6 +40,7 @@ public sealed class InstallModelsJobHandler : IJobHandler
     private readonly ImageTreeReader _trees;
     private readonly TenantApiClient _tenants;
     private readonly TenantUpgradeService _upgrades;
+    private readonly LiveSnapshotRestore _rollback;
     private readonly FleetConfig _fleet;
 
     public InstallModelsJobHandler(
@@ -47,12 +48,14 @@ public sealed class InstallModelsJobHandler : IJobHandler
         ImageTreeReader trees,
         TenantApiClient tenants,
         TenantUpgradeService upgrades,
+        LiveSnapshotRestore rollback,
         FleetConfig fleet)
     {
         _db = db;
         _trees = trees;
         _tenants = tenants;
         _upgrades = upgrades;
+        _rollback = rollback;
         _fleet = fleet;
     }
 
@@ -66,6 +69,7 @@ public sealed class InstallModelsJobHandler : IJobHandler
 
         var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct)
             ?? throw new InvalidOperationException($"Tenant {id} is no longer in the registry.");
+        var previousPin = tenant.Models;
 
         var source = string.IsNullOrWhiteSpace(payload.ImageTag) ? tenant.ImageTag : payload.ImageTag!;
         var wanted = payload.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -95,63 +99,73 @@ public sealed class InstallModelsJobHandler : IJobHandler
         }
         await context.LogAsync($"{tree.Length / 1024} KB of models read straight from the registry.", ct);
 
-        await context.StepAsync($"Installing into {tenant.Slug} while it runs", 55, ct);
-        var result = await _tenants.InstallTreeAsync(
-            tenant, tree, TimeSpan.FromSeconds(Math.Max(_fleet.ReadinessTimeoutSeconds, 300)), ct);
-
-        if (!result.Succeeded)
+        Exception? failure = null;
+        try
         {
-            // Import can commit and still answer 500 (persist onto a read-only
-            // image path). Metadata is then in the tenant with no new columns —
-            // AccountingPostingTest died on "column parentid does not exist" after
-            // exactly that. Materialize is the same job as Compile: schema, types,
-            // scripts. It cannot undo a half-import, but it can make one runnable.
-            await context.StepAsync("Install reported failure — materializing what landed", 70, ct);
-            var materialize = await _tenants.MaterializeAsync(
-                tenant, TimeSpan.FromSeconds(Math.Max(_fleet.ReadinessTimeoutSeconds, 300)), ct);
-            var materializeNote = materialize.Succeeded
-                ? "Schema sync and compile still ran against whatever metadata was already in the database."
-                : $"Materialize also failed: {string.Join(" | ", materialize.Errors.Take(3))}.";
+            await context.StepAsync($"Installing into {tenant.Slug} while it runs", 55, ct);
+            var result = await _tenants.InstallTreeAsync(
+                tenant, tree, TimeSpan.FromSeconds(Math.Max(_fleet.ReadinessTimeoutSeconds, 300)), ct);
+
+            if (!result.Succeeded)
+            {
+                failure = new InvalidOperationException(
+                    $"{tenant.Slug} did not install the models: {string.Join(" | ", result.Errors.Take(5))}.");
+            }
+            else
+            {
+                await context.LogAsync($"Installed: {result.Created} created, {result.Updated} updated.", ct);
+                if (result.Errors.Count > 0)
+                {
+                    await context.LogAsync(
+                        "Import remarks (per-model; siblings that compiled are still stamped): "
+                        + string.Join(" | ", result.Errors.Take(8)), ct);
+                }
+
+                if (wanted.Count > 0)
+                {
+                    await context.StepAsync("Recording the pin", 85, ct);
+                    tenant.Models = System.Text.Json.JsonSerializer.Serialize(wanted);
+                    await _db.SaveChangesAsync(ct);
+                }
+
+                var relevant = ModelGraph.ProblemsFor(result.CompilationProblems, wanted);
+                if (relevant.Count > 0)
+                {
+                    failure = new InvalidOperationException(
+                        $"The models installed into {tenant.Slug} but {relevant.Count} of the requested set did not compile: "
+                        + string.Join(" | ", relevant.Take(5)) + ".");
+                }
+                else if (result.CompilationProblems.Count > 0)
+                {
+                    await context.LogAsync(
+                        "Other models still do not compile (not in this install): "
+                        + string.Join(" | ", result.CompilationProblems.Take(5)), ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+
+        if (failure is not null)
+        {
+            tenant.Models = previousPin;
+            await _db.SaveChangesAsync(CancellationToken.None);
+            try
+            {
+                await _rollback.RestoreAsync(tenant, snapshot, context, CancellationToken.None);
+            }
+            catch (Exception rollback)
+            {
+                throw new InvalidOperationException(
+                    $"{failure.Message} Rollback of snapshot {snapshot.FileName} also failed: {rollback.Message}. "
+                    + "Restore that file into a copy and swap it in.",
+                    failure);
+            }
             throw new InvalidOperationException(
-                $"{tenant.Slug} did not install the models: {string.Join(" | ", result.Errors.Take(5))}. "
-                + materializeNote
-                + $" Snapshot {snapshot.FileName} predates the attempt.");
-        }
-
-        await context.LogAsync($"Installed: {result.Created} created, {result.Updated} updated.", ct);
-        if (result.Errors.Count > 0)
-        {
-            await context.LogAsync(
-                "Import remarks (per-model; siblings that compiled are still stamped): "
-                + string.Join(" | ", result.Errors.Take(8)), ct);
-        }
-
-        // Recorded so the next recreate installs the same set. Without this the tenant
-        // would quietly revert to the fleet default the first time its container was
-        // rebuilt for any unrelated reason.
-        if (wanted.Count > 0)
-        {
-            await context.StepAsync("Recording the pin", 85, ct);
-            tenant.Models = System.Text.Json.JsonSerializer.Serialize(wanted);
-            await _db.SaveChangesAsync(ct);
-        }
-
-        var relevant = ModelGraph.ProblemsFor(result.CompilationProblems, wanted);
-        if (relevant.Count > 0)
-        {
-            // Installed is not the same as working. The models that compiled are
-            // stamped; these names in the install set did not compile.
-            throw new InvalidOperationException(
-                $"The models installed into {tenant.Slug} but {relevant.Count} of the requested set did not compile: "
-                + string.Join(" | ", relevant.Take(5))
-                + $". Snapshot {snapshot.FileName} predates the install.");
-        }
-
-        if (result.CompilationProblems.Count > 0)
-        {
-            await context.LogAsync(
-                "Other models still do not compile (not in this install): "
-                + string.Join(" | ", result.CompilationProblems.Take(5)), ct);
+                $"{failure.Message} Rolled back to snapshot {snapshot.FileName}.",
+                failure);
         }
 
         await context.StepAsync($"{tenant.Slug} has the models and is still serving", 100, ct);

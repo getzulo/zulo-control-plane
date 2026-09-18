@@ -128,6 +128,47 @@ public sealed class TenantDatabaseProvisioner
         return (database, role, password, TenantConnectionString(database, role, password));
     }
 
+    /// <summary>
+    /// Creates an empty database owned by an EXISTING role — the live tenant's, so
+    /// the container's connection string does not change after a snapshot restore.
+    /// </summary>
+    public async Task CreateOwnedDatabaseAsync(string database, string role, CancellationToken ct = default)
+    {
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+        await ExecuteAsync(admin, $"CREATE DATABASE \"{database}\" OWNER \"{role}\"", ct);
+        await AdoptGrantsAsync(database, role, ct);
+
+        await using var inTenant = new NpgsqlConnection(AdminConnectionString(database));
+        await inTenant.OpenAsync(ct);
+        await ExecuteAsync(inTenant, $"GRANT ALL ON SCHEMA public TO \"{role}\"", ct);
+    }
+
+    /// <summary>
+    /// <c>ALTER DATABASE … RENAME</c>. The caller MUST have stopped every session
+    /// against <paramref name="from"/> — typically by stopping the tenant container.
+    /// </summary>
+    public async Task RenameDatabaseAsync(string from, string to, CancellationToken ct = default)
+    {
+        await using var admin = new NpgsqlConnection(AdminConnectionString());
+        await admin.OpenAsync(ct);
+        await Terminate(admin, from, ct);
+        await ExecuteAsync(admin, $"ALTER DATABASE \"{from}\" RENAME TO \"{to}\"", ct);
+    }
+
+    /// <summary>
+    /// <c>tenant_acme_pre_20260918T073900Z</c>. Timestamped so a second rollback
+    /// cannot overwrite the undo of the first.
+    /// </summary>
+    public static string ArchiveName(string database)
+    {
+        var suffix = $"_pre_{DateTime.UtcNow:yyyyMMddTHHmmss}Z";
+        var name = database + suffix;
+        if (name.Length > 63)
+            name = database[..(63 - suffix.Length)] + suffix;
+        return name;
+    }
+
     /// <summary>Drops the tenant's database and role. Best-effort: a half-deleted
     /// tenant must not block the rest of the teardown.</summary>
     public async Task DropAsync(string? database, string? role, CancellationToken ct = default)

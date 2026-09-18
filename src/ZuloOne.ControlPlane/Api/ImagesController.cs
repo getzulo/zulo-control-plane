@@ -99,6 +99,7 @@ public class ImagesController : ControllerBase
             keepUnusedReleases = keepUnused,
             releases = releases.Select(t => Describe(t, registry, repository, inUse, rollback)),
             builds = builds.Select(t => Describe(t, registry, repository, inUse, rollback)),
+            distribution = await DescribeDistributionAsync(registry, repository, inUse.ToDictionary(g => g.Tag, g => g.Slugs), keepUnused, ct),
         });
 
         object Describe(string tag, string reg, string repo, IEnumerable<dynamic> used, HashSet<string> window)
@@ -173,7 +174,25 @@ public class ImagesController : ControllerBase
         {
             return StatusCode(StatusCodes.Status502BadGateway, new { error = $"Could not read the registry: {ex.Message}" });
         }
-        if (!tags.Contains(tag)) return NotFound(new { error = $"No tag '{tag}' in {repository}." });
+        if (!tags.Contains(tag))
+        {
+            var dist = DistributionRepository(repository);
+            if (dist is null)
+                return NotFound(new { error = $"No tag '{tag}' in {repository}." });
+            repository = dist;
+            try
+            {
+                var json = await client.GetStringAsync($"http://{registry}/v2/{repository}/tags/list", ct);
+                tags = JsonDocument.Parse(json).RootElement.TryGetProperty("tags", out var t2) && t2.ValueKind == JsonValueKind.Array
+                    ? t2.EnumerateArray().Select(x => x.GetString() ?? string.Empty).Where(x => x.Length > 0).ToList()
+                    : [];
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, new { error = $"Could not read the registry: {ex.Message}" });
+            }
+        }
+        if (!tags.Contains(tag)) return NotFound(new { error = $"No tag '{tag}' in the registry." });
 
         var digests = await ResolveDigestsAsync(registry, repository, tags, ct);
         if (!digests.TryGetValue(tag, out var digest) || digest is null)
@@ -187,7 +206,10 @@ public class ImagesController : ControllerBase
             .ToListAsync(ct);
 
         var releases = tags.Where(IsRelease).OrderByDescending(t => t, CalVer).ToList();
-        var rollback = RollbackWindow(releases, registry, repository, inUse, _settings.Int("Images:KeepUnusedReleases"));
+        var platformRepo = SplitImage(_fleet.DefaultImage).Repository;
+        var rollback = string.Equals(repository, platformRepo, StringComparison.Ordinal)
+            ? RollbackWindow(releases, registry, repository, inUse, _settings.Int("Images:KeepUnusedReleases"))
+            : [];
         var blocker = WhyUndeletable(tag, siblings, registry, repository, inUse, rollback);
         if (blocker is not null) return Conflict(new { error = blocker, digest, alsoTagged = siblings });
 
@@ -268,6 +290,44 @@ public class ImagesController : ControllerBase
                 });
             }
             removed.AddRange(siblings.Prepend(tag));
+        }
+
+        var distRepo = DistributionRepository(repository);
+        if (distRepo is not null)
+        {
+            List<string> distTags;
+            try
+            {
+                var json = await client.GetStringAsync($"http://{registry}/v2/{distRepo}/tags/list", ct);
+                distTags = JsonDocument.Parse(json).RootElement.TryGetProperty("tags", out var dt) && dt.ValueKind == JsonValueKind.Array
+                    ? dt.EnumerateArray().Select(x => x.GetString() ?? string.Empty).Where(x => x.Length > 0).ToList()
+                    : [];
+            }
+            catch
+            {
+                distTags = [];
+            }
+            if (distTags.Count > 0)
+            {
+                var distDigests = await ResolveDigestsAsync(registry, distRepo, distTags, ct);
+                var keepNewest = distTags
+                    .OrderByDescending(t => t, Comparer<string>.Create(ModelGraph.CompareVersions))
+                    .Take(Math.Max(_settings.Int("Images:KeepUnusedReleases"), 1))
+                    .ToHashSet(StringComparer.Ordinal);
+                var seenDist = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var tag in distTags)
+                {
+                    if (!distDigests.TryGetValue(tag, out var digest) || digest is null || !seenDist.Add(digest))
+                        continue;
+                    if (keepNewest.Contains(tag)) continue;
+                    var siblings = distDigests.Where(kv => kv.Value == digest && kv.Key != tag).Select(kv => kv.Key).OrderBy(x => x).ToList();
+                    if (WhyUndeletable(tag, siblings, registry, distRepo, inUse, []) is not null)
+                        continue;
+                    var response = await client.DeleteAsync($"http://{registry}/v2/{distRepo}/manifests/{digest}", ct);
+                    if (response.IsSuccessStatusCode)
+                        removed.AddRange(siblings.Prepend(tag).Select(t => $"{distRepo}:{t}"));
+                }
+            }
         }
 
         return Ok(new
@@ -564,6 +624,64 @@ public class ImagesController : ControllerBase
             .Max();
 
         return $"{prefix}{highest + 1}";
+    }
+
+    /// <summary>
+    /// The business-layer repository beside the platform one.
+    /// <c>zuloone-core</c> → <c>zuloone</c>. Null when the fleet image is not a *-core pin.
+    /// </summary>
+    public static string? DistributionRepository(string platformRepository) =>
+        platformRepository.EndsWith("-core", StringComparison.OrdinalIgnoreCase)
+            ? platformRepository[..^"-core".Length]
+            : null;
+
+    private async Task<IReadOnlyList<object>> DescribeDistributionAsync(
+        string registry, string platformRepository, Dictionary<string, List<string>> inUse, int keep, CancellationToken ct)
+    {
+        _ = keep;
+        var distRepo = DistributionRepository(platformRepository);
+        if (distRepo is null) return [];
+
+        List<string> tags;
+        using var client = _http.CreateClient("registry");
+        try
+        {
+            var json = await client.GetStringAsync($"http://{registry}/v2/{distRepo}/tags/list", ct);
+            tags = JsonDocument.Parse(json).RootElement.TryGetProperty("tags", out var t) && t.ValueKind == JsonValueKind.Array
+                ? t.EnumerateArray().Select(x => x.GetString() ?? string.Empty).Where(x => x.Length > 0).ToList()
+                : [];
+        }
+        catch
+        {
+            return [];
+        }
+
+        var digests = await ResolveDigestsAsync(registry, distRepo, tags, ct);
+        return tags
+            .Where(t => !IsRedundantCommitTag(t, digests))
+            .OrderByDescending(t => t, Comparer<string>.Create(ModelGraph.CompareVersions))
+            .Select(t =>
+            {
+                var full = $"{registry}/{distRepo}:{t}";
+                var users = inUse.GetValueOrDefault(full) ?? [];
+                var digest = digests.GetValueOrDefault(t);
+                var siblings = digest is null
+                    ? new List<string>()
+                    : digests.Where(kv => kv.Value == digest && kv.Key != t).Select(kv => kv.Key).OrderBy(x => x).ToList();
+                var blocker = users.Count > 0 ? $"'{t}' is what {string.Join(", ", users)} runs." : null;
+                return (object)new
+                {
+                    tag = t,
+                    image = full,
+                    inUseBy = users,
+                    isDefault = false,
+                    digest,
+                    alsoTagged = siblings,
+                    canDelete = blocker is null,
+                    deleteBlockedBy = blocker,
+                };
+            })
+            .ToList();
     }
 
     /// <summary><c>host:port/repo:tag</c> → registry and repository.</summary>

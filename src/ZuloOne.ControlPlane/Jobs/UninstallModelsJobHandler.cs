@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
+using ZuloOne.ControlPlane.Snapshots;
 
 namespace ZuloOne.ControlPlane.Jobs;
 
@@ -25,6 +26,7 @@ public sealed class UninstallModelsJobHandler : IJobHandler
     private readonly ControlPlaneDbContext _db;
     private readonly TenantApiClient _tenants;
     private readonly TenantUpgradeService _upgrades;
+    private readonly LiveSnapshotRestore _rollback;
     private readonly TenantModelsService _models;
     private readonly FleetConfig _fleet;
 
@@ -32,12 +34,14 @@ public sealed class UninstallModelsJobHandler : IJobHandler
         ControlPlaneDbContext db,
         TenantApiClient tenants,
         TenantUpgradeService upgrades,
+        LiveSnapshotRestore rollback,
         TenantModelsService models,
         FleetConfig fleet)
     {
         _db = db;
         _tenants = tenants;
         _upgrades = upgrades;
+        _rollback = rollback;
         _models = models;
         _fleet = fleet;
     }
@@ -74,6 +78,7 @@ public sealed class UninstallModelsJobHandler : IJobHandler
             $"Snapshot {snapshot.FileName} ({snapshot.SizeBytes / 1024} KB). The container is not being recreated, "
             + "so there is no previous image to pin back — this file is the rollback.", ct);
 
+        var previousPin = tenant.Models;
         await context.StepAsync($"Removing {row.Name} from {tenant.Slug}", 45, ct);
         var timeout = TimeSpan.FromSeconds(Math.Max(_fleet.ReadinessTimeoutSeconds, 300));
         var deleted = await _tenants.DeleteModelAsync(tenant, row.MetaId, timeout, ct);
@@ -82,12 +87,10 @@ public sealed class UninstallModelsJobHandler : IJobHandler
             if (deleted.DependentModels.Count > 0)
             {
                 throw new InvalidOperationException(
-                    $"Cannot remove {row.Name}: {string.Join(", ", deleted.DependentModels)} still depend on it. "
-                    + $"Snapshot {snapshot.FileName} predates the attempt.");
+                    $"Cannot remove {row.Name}: {string.Join(", ", deleted.DependentModels)} still depend on it.");
             }
-            throw new InvalidOperationException(
-                $"{tenant.Slug} did not remove {row.Name}: {deleted.Error}. "
-                + $"Snapshot {snapshot.FileName} predates the attempt.");
+            await RollbackUninstallAsync(tenant, previousPin, snapshot, context,
+                $"{tenant.Slug} did not remove {row.Name}: {deleted.Error}.");
         }
         await context.LogAsync(
             $"Removed {row.Name}: {deleted.RowsDeleted} metadata row(s), {deleted.DroppedTables.Count} table(s) dropped.", ct);
@@ -108,19 +111,35 @@ public sealed class UninstallModelsJobHandler : IJobHandler
         var materialize = await _tenants.MaterializeAsync(tenant, timeout, ct);
         if (!materialize.Succeeded)
         {
-            throw new InvalidOperationException(
+            await RollbackUninstallAsync(tenant, previousPin, snapshot, context,
                 $"{row.Name} is gone from {tenant.Slug} but materialize failed: "
-                + $"{string.Join(" | ", materialize.Errors.Take(5))}. "
-                + $"Snapshot {snapshot.FileName} predates the uninstall.");
+                + string.Join(" | ", materialize.Errors.Take(5)) + ".");
         }
         if (materialize.CompilationProblems.Count > 0)
         {
-            throw new InvalidOperationException(
+            await RollbackUninstallAsync(tenant, previousPin, snapshot, context,
                 $"{row.Name} is gone from {tenant.Slug} but {materialize.CompilationProblems.Count} model(s) did not compile: "
-                + string.Join(" | ", materialize.CompilationProblems.Take(5))
-                + $". Snapshot {snapshot.FileName} predates the uninstall.");
+                + string.Join(" | ", materialize.CompilationProblems.Take(5)) + ".");
         }
 
         await context.StepAsync($"{tenant.Slug} no longer has {row.Name} and is still serving", 100, ct);
+    }
+
+    private async Task RollbackUninstallAsync(
+        Tenant tenant, string? previousPin, Snapshot snapshot, JobContext context, string reason)
+    {
+        tenant.Models = previousPin;
+        await _db.SaveChangesAsync(CancellationToken.None);
+        try
+        {
+            await _rollback.RestoreAsync(tenant, snapshot, context, CancellationToken.None);
+        }
+        catch (Exception rollback)
+        {
+            throw new InvalidOperationException(
+                $"{reason} Rollback of snapshot {snapshot.FileName} also failed: {rollback.Message}. "
+                + "Restore that file into a copy and swap it in.");
+        }
+        throw new InvalidOperationException($"{reason} Rolled back to snapshot {snapshot.FileName}.");
     }
 }

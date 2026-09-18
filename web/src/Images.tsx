@@ -43,11 +43,11 @@ export function ImagesPage() {
   // older than what the fleet runs means the newest customer gets the oldest code.
   const newest = images?.releases[0];
   const defaultIsStale = Boolean(newest && images?.defaultImage && newest.image !== images.defaultImage);
-  const unused = [...(images?.releases ?? []), ...(images?.builds ?? [])].filter((t) => t.canDelete);
+  const unused = [...(images?.releases ?? []), ...(images?.builds ?? []), ...(images?.distribution ?? [])].filter((t) => t.canDelete);
   const keepUnused = images?.keepUnusedReleases ?? 3;
 
-  const rows = (list: ImageTag[], isRelease: boolean) => list.map((t) => (
-    <Table.Tr key={t.tag}>
+  const rows = (list: ImageTag[], kind: 'release' | 'build' | 'distribution') => list.map((t) => (
+    <Table.Tr key={t.image}>
       <Table.Td>
         <Group gap={6}>
           <Code>{t.tag}</Code>
@@ -66,8 +66,7 @@ export function ImagesPage() {
       </Table.Td>
       <Table.Td>
         <Group gap={6} justify="flex-end" wrap="nowrap">
-          {/* Only on builds: a release is what you promote TO, not FROM. */}
-          {!isRelease && (
+          {kind === 'build' && (
             <Tooltip label="Give this build a release version" withArrow>
               <Button size="xs" variant="light" color="teal" leftSection={<IconRocket size={14} />}
                       onClick={() => { setPromote(t); setVersion(''); setNotes(''); }}>
@@ -75,9 +74,11 @@ export function ImagesPage() {
               </Button>
             </Tooltip>
           )}
-          <Button size="xs" variant="light" leftSection={<IconArrowUp size={14} />} onClick={() => { setPick(t); setConfirm(''); }}>
-            Move a tenant here
-          </Button>
+          {kind !== 'distribution' && (
+            <Button size="xs" variant="light" leftSection={<IconArrowUp size={14} />} onClick={() => { setPick(t); setConfirm(''); }}>
+              Move a tenant here
+            </Button>
+          )}
           <Tooltip label={t.deleteBlockedBy ?? 'Remove this image from the registry'} multiline w={320} withArrow>
             {/* A disabled button cannot fire hover, so the span carries it — and
                 the reason matters more than the button here. */}
@@ -162,7 +163,8 @@ export function ImagesPage() {
             Prune unused ({unused.length})
           </Button>
           <Text size="xs" c="dimmed">
-            Leaves tenants, the default, and the newest {keepUnused} unused release{keepUnused === 1 ? '' : 's'}.
+            Leaves tenants, the default, the newest {keepUnused} unused release{keepUnused === 1 ? '' : 's'},
+            and the newest {keepUnused} unused distribution pack{keepUnused === 1 ? '' : 's'}.
           </Text>
         </Group>
       )}
@@ -175,17 +177,30 @@ export function ImagesPage() {
               {/* Separate, not interleaved: a CI build is not something to pin a
                   customer to, and mixing them makes the list unreadable. */}
               <Tabs.Tab value="builds">CI builds ({images?.builds.length ?? 0})</Tabs.Tab>
+              <Tabs.Tab value="distribution">Distribution ({images?.distribution?.length ?? 0})</Tabs.Tab>
             </Tabs.List>
             <Tabs.Panel value="releases">
               <Table striped highlightOnHover>
                 <Table.Thead><Table.Tr><Table.Th>Tag</Table.Th><Table.Th>In use by</Table.Th><Table.Th /></Table.Tr></Table.Thead>
-                <Table.Tbody>{rows(images?.releases ?? [], true)}</Table.Tbody>
+                <Table.Tbody>{rows(images?.releases ?? [], 'release')}</Table.Tbody>
               </Table>
             </Tabs.Panel>
             <Tabs.Panel value="builds">
               <Table striped highlightOnHover>
                 <Table.Thead><Table.Tr><Table.Th>Tag</Table.Th><Table.Th>In use by</Table.Th><Table.Th /></Table.Tr></Table.Thead>
-                <Table.Tbody>{rows(images?.builds ?? [], false)}</Table.Tbody>
+                <Table.Tbody>{rows(images?.builds ?? [], 'build')}</Table.Tbody>
+              </Table>
+            </Tabs.Panel>
+            <Tabs.Panel value="distribution">
+              <Text size="sm" c="dimmed" p="sm">
+                Business-layer images (<Code>zuloone:2026.0.N</Code>). Each is a pack of
+                model versions — install one from Models. They accumulate on every
+                publish; delete unused ones here. Prune keeps the newest{' '}
+                {keepUnused} unused pack{keepUnused === 1 ? '' : 's'}.
+              </Text>
+              <Table striped highlightOnHover>
+                <Table.Thead><Table.Tr><Table.Th>Tag</Table.Th><Table.Th>In use by</Table.Th><Table.Th /></Table.Tr></Table.Thead>
+                <Table.Tbody>{rows(images?.distribution ?? [], 'distribution')}</Table.Tbody>
               </Table>
             </Tabs.Panel>
           </Tabs>
@@ -244,6 +259,7 @@ export function ImagesPage() {
           <Alert color="red" icon={<IconAlertTriangle size={16} />}>
             Removes {unused.length} unused image{unused.length === 1 ? '' : 's'} from the registry.
             Tenants, the fleet default, and the newest {keepUnused} unused release{keepUnused === 1 ? '' : 's'} stay.
+            Distribution packs (`zuloone:2026.0.N`) are included; the newest {keepUnused} unused pack{keepUnused === 1 ? '' : 's'} stay, the rest go.
           </Alert>
           <Text size="xs" c="dimmed">
             Disk is not freed by this. Manifests go immediately; layers survive until{' '}

@@ -70,7 +70,8 @@ public enum JobKind
     /// <remarks>
     /// Distinct from Upgrade because the undo is different, and that difference is the
     /// whole reason to name it separately: an Upgrade can be undone by pinning the
-    /// previous image back, this cannot, and its snapshot is the only way out.
+    /// previous image back; this restores the pre-install snapshot automatically when
+    /// the import or compile fails, so a broken package cannot stay on the tenant.
     /// </remarks>
     InstallModels,
 
@@ -94,8 +95,8 @@ public enum JobKind
     Recreate,
 
     /// <summary>
-    /// Cascade-delete one model from a running tenant. Snapshot first — the
-    /// container is not recreated, so that file is the only undo. Incoming
+    /// Cascade-delete one model from a running tenant. Snapshot first; restored
+    /// automatically if the delete or the compile afterwards fails. Incoming
     /// dependents refuse the job; Core and the seeded stand model are refused.
     /// </summary>
     UninstallModels,

@@ -1,6 +1,6 @@
 ﻿import { Fragment, useCallback, useMemo, useState } from 'react';
 import {
-  ActionIcon, Alert, Badge, Button, Card, Checkbox, Group, Loader, Modal, Select,
+  ActionIcon, Alert, Badge, Button, Card, Checkbox, Code, Group, Loader, Modal, Select,
   Stack, Table, Text, TextInput, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import {
@@ -11,6 +11,34 @@ import { JobProgress, inputChecked, useJob, usePoll } from './shared';
 
 type CatalogueModel = ModelCatalogue['models'][number];
 type CatalogueTenant = ModelCatalogue['tenants'][number];
+type CatalogueImage = ModelCatalogue['images'][number];
+
+function cmpVer(a?: string | null, b?: string | null): number {
+  const parse = (v?: string | null) =>
+    (v ?? '0').split('.').map((p) => parseInt(p.replace(/\D/g, ''), 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+function tagOf(image: string): string {
+  const i = image.lastIndexOf(':');
+  return i >= 0 ? image.slice(i + 1) : image;
+}
+
+function newestImage(images: string[]): string | null {
+  if (images.length === 0) return null;
+  return [...images].sort((a, b) => cmpVer(tagOf(b), tagOf(a)))[0] ?? null;
+}
+
+function versionInPack(pack: CatalogueImage | undefined, model: string): string | undefined {
+  return pack?.models.find((m) => m.name.toLowerCase() === model.toLowerCase())?.version;
+}
 
 function expandSelection(selected: string[], catalogue: CatalogueModel[]): string[] {
   const byName = new Map(catalogue.map((m) => [m.model.toLowerCase(), m]));
@@ -58,6 +86,9 @@ export function ModelsPage() {
   const [installing, setInstalling] = useState<CatalogueTenant | null>(null);
   const [installImage, setInstallImage] = useState<string | null>(null);
   const [installModels, setInstallModels] = useState<string[]>([]);
+  const [dropPackConfirm, setDropPackConfirm] = useState('');
+  const [droppingPack, setDroppingPack] = useState(false);
+  const [removingPack, setRemovingPack] = useState<CatalogueImage | null>(null);
   const [removing, setRemoving] = useState<{ tenant: CatalogueTenant; model: string } | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState('');
   const job = useJob(jobId);
@@ -78,17 +109,53 @@ export function ModelsPage() {
   const models = data?.models ?? [];
   const tenants = data?.tenants ?? [];
   const installable = useMemo(() => models.filter((m) => !m.isSystem), [models]);
-  const imageOptions = useMemo(
-    () => (data?.images ?? []).map((i) => ({ value: i.image, label: `${i.image}  (${i.models.length} models)` })),
+  const packs = useMemo(
+    () => [...(data?.images ?? [])].sort((a, b) => cmpVer(b.tag, a.tag)),
     [data]);
+  const selectedPack = packs.find((p) => p.image === installImage);
+  const packInUse = (pack?: CatalogueImage) =>
+    tenants.filter((t) => t.imageTag === pack?.image).map((t) => t.slug);
+  const imageOptions = useMemo(
+    () => packs.map((i) => ({
+      value: i.image,
+      label: `${i.tag}  ·  ${i.models.length} models`,
+    })),
+    [packs]);
   const outdatedTenants = tenants.filter((t) => t.outdatedCount > 0 || t.missingCount > 0).length;
 
   function openInstall(tenant: CatalogueTenant, preset?: string[]) {
-    const source = tenant.sourceImage ?? data?.sourceImage ?? null;
+    const source = tenant.sourceImage ?? data?.sourceImage ?? packs[0]?.image ?? null;
     setInstalling(tenant);
     setInstallImage(source);
     const chosen = preset ?? tenant.installed.filter((m) => m.outdated && !m.isSystem).map((m) => m.name);
     setInstallModels(expandSelection(chosen, models));
+    setDropPackConfirm('');
+  }
+
+  function switchPack(image: string | null) {
+    setInstallImage(image);
+    setDropPackConfirm('');
+    const pack = packs.find((p) => p.image === image);
+    const names = new Set((pack?.models ?? []).map((m) => m.name.toLowerCase()));
+    setInstallModels((prev) => expandSelection(prev.filter((n) => names.has(n.toLowerCase())), models));
+  }
+
+  function pickModelVersion(model: string, version: string) {
+    const entry = models.find((m) => m.model.toLowerCase() === model.toLowerCase())
+      ?.versions.find((v) => v.version === version);
+    if (!entry) return;
+    const next = (installImage && entry.images.includes(installImage))
+      ? installImage
+      : newestImage(entry.images);
+    setInstallImage(next);
+    setDropPackConfirm('');
+    const pack = packs.find((p) => p.image === next);
+    const names = new Set((pack?.models ?? []).map((m) => m.name.toLowerCase()));
+    setInstallModels((prev) => {
+      const kept = prev.filter((n) => names.has(n.toLowerCase()));
+      if (!kept.some((n) => n.toLowerCase() === model.toLowerCase())) kept.push(model);
+      return expandSelection(kept, models);
+    });
   }
 
   function toggleInstallModel(name: string, checked: boolean) {
@@ -99,6 +166,24 @@ export function ModelsPage() {
     const requiredBy = stillRequired(name, installModels, models);
     if (requiredBy.length > 0) return;
     setInstallModels(expandSelection(installModels.filter((m) => m.toLowerCase() !== name.toLowerCase()), models));
+  }
+
+  async function dropPack(pack: CatalogueImage) {
+    setDroppingPack(true);
+    try {
+      await api.removeImage(pack.tag);
+      if (installImage === pack.image) {
+        const remaining = packs.filter((p) => p.image !== pack.image);
+        setInstallImage(remaining[0]?.image ?? null);
+      }
+      setDropPackConfirm('');
+      setRemovingPack(null);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDroppingPack(false);
+    }
   }
 
   async function install() {
@@ -156,9 +241,9 @@ export function ModelsPage() {
           {outdatedTenants > 0 && (
             <Badge color="yellow" variant="light">{outdatedTenants} tenant{outdatedTenants === 1 ? '' : 's'} outdated</Badge>
           )}
-          {data?.sourceImage && (
-            <Tooltip label="Installs read the model tree from this distribution image">
-              <Badge variant="light">{data.sourceImage}</Badge>
+          {packs.length > 0 && (
+            <Tooltip label="Each distribution image is one consistent pack of model versions">
+              <Badge variant="light">{packs.length} pack{packs.length === 1 ? '' : 's'}</Badge>
             </Tooltip>
           )}
           <Button
@@ -311,6 +396,77 @@ export function ModelsPage() {
       </Card>
 
       <Card withBorder padding={0}>
+        <Group p="sm" gap="xs" justify="space-between">
+          <Group gap="xs">
+            <IconPackage size={16} />
+            <Text fw={600} size="sm">Distribution packs ({packs.length})</Text>
+          </Group>
+          <Text size="xs" c="dimmed">
+            One image = one consistent set of model versions. Delete unused packs here;
+            Images → Distribution also prunes down to the newest few.
+          </Text>
+        </Group>
+        {loading ? (
+          <Group p="xl" justify="center"><Loader /></Group>
+        ) : (
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Pack</Table.Th>
+                <Table.Th>Models</Table.Th>
+                <Table.Th />
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {packs.map((p) => {
+                const users = packInUse(p);
+                return (
+                  <Table.Tr key={p.image}>
+                    <Table.Td>
+                      <Group gap={8}>
+                        <Code>{p.tag}</Code>
+                        {p.image === data?.sourceImage && <Badge size="xs" variant="light">newest</Badge>}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="xs" c="dimmed">
+                        {p.models.map((m) => `${m.name} ${m.version}`).join(' · ') || '—'}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Tooltip
+                        label={users.length > 0 ? `In use by ${users.join(', ')}` : `Remove ${p.tag} from the registry`}
+                        withArrow>
+                        <span>
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            disabled={users.length > 0}
+                            aria-label={`Delete pack ${p.tag}`}
+                            onClick={() => { setRemovingPack(p); setDropPackConfirm(''); }}>
+                            <IconTrash size={16} />
+                          </ActionIcon>
+                        </span>
+                      </Tooltip>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+              {packs.length === 0 && (
+                <Table.Tr>
+                  <Table.Td colSpan={3}>
+                    <Text ta="center" c="dimmed" py="lg">
+                      No distribution image in the registry.
+                    </Text>
+                  </Table.Td>
+                </Table.Tr>
+              )}
+            </Table.Tbody>
+          </Table>
+        )}
+      </Card>
+
+      <Card withBorder padding={0}>
         <Group p="sm" gap="xs">
           <IconPackage size={16} />
           <Text fw={600} size="sm">Catalogue ({installable.length})</Text>
@@ -322,7 +478,7 @@ export function ModelsPage() {
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Model</Table.Th>
-                <Table.Th>Latest</Table.Th>
+                <Table.Th>Versions in packs</Table.Th>
                 <Table.Th>Depends on</Table.Th>
                 <Table.Th>Tenants</Table.Th>
               </Table.Tr>
@@ -333,10 +489,22 @@ export function ModelsPage() {
                   t.installed.some((i) => i.name.toLowerCase() === m.model.toLowerCase()));
                 const behind = holders.filter((t) =>
                   t.installed.some((i) => i.name.toLowerCase() === m.model.toLowerCase() && i.outdated));
+                const versions = [...m.versions].sort((a, b) => cmpVer(b.version, a.version));
                 return (
                   <Table.Tr key={m.model}>
                     <Table.Td><Text size="sm" fw={500}>{m.model}</Text></Table.Td>
-                    <Table.Td><Badge variant="light" size="sm">{m.latest}</Badge></Table.Td>
+                    <Table.Td>
+                      <Group gap={4}>
+                        {versions.map((v) => (
+                          <Badge
+                            key={v.version}
+                            variant={v.version === m.latest ? 'light' : 'outline'}
+                            size="sm">
+                            {v.version}
+                          </Badge>
+                        ))}
+                      </Group>
+                    </Table.Td>
                     <Table.Td>
                       {m.dependsOn.length === 0
                         ? <Text size="xs" c="dimmed">—</Text>
@@ -371,34 +539,59 @@ export function ModelsPage() {
 
       <Modal
         opened={Boolean(installing)}
-        onClose={() => setInstalling(null)}
+        onClose={() => { setInstalling(null); setDropPackConfirm(''); }}
         title={`Install models into ${installing?.slug ?? ''}`}
         size="lg">
         <Stack gap="md">
           <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>
-            The container stays up. A snapshot is taken first — that file is the only
-            undo, because the image does not change. Checking one model also checks
-            everything it depends on.
+            The container stays up. A snapshot is taken first and restored
+            automatically if the import or compile fails, so a broken package
+            cannot leave half-applied scripts on the tenant. Checking one model
+            also checks everything it depends on.
           </Alert>
 
           <Select
-            label="Take the models from"
-            description="A distribution image. zuloone-core carries none."
+            label="Pack"
+            description={packs.length <= 1
+              ? 'Only one pack is in the registry. Publish another distribution image to install a different set of versions.'
+              : 'One image is one consistent pack. Changing a model version switches the pack — the other models follow.'}
             placeholder="(pick a distribution image)"
             data={imageOptions}
             value={installImage}
-            onChange={setInstallImage}
+            onChange={switchPack}
             searchable
           />
 
-          <Stack gap={6}>
+          {selectedPack && (
+            <Group justify="space-between" align="flex-start" wrap="nowrap">
+              <Text size="xs" c="dimmed">
+                {selectedPack.models.map((m) => `${m.name} ${m.version}`).join(' · ')}
+              </Text>
+              {packInUse(selectedPack).length === 0 ? (
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="red"
+                  leftSection={<IconTrash size={12} />}
+                  onClick={() => { setRemovingPack(selectedPack); setDropPackConfirm(''); }}>
+                  Delete this pack
+                </Button>
+              ) : (
+                <Text size="xs" c="dimmed">In use by {packInUse(selectedPack).join(', ')}</Text>
+              )}
+            </Group>
+          )}
+
+          <Stack gap={8}>
             <Group justify="space-between">
               <Text size="sm" fw={500}>Models</Text>
               <Button
                 size="compact-xs"
                 variant="subtle"
-                onClick={() => setInstallModels(expandSelection(installable.map((m) => m.model), models))}>
-                Select all
+                disabled={!selectedPack}
+                onClick={() => setInstallModels(expandSelection(
+                  (selectedPack?.models ?? []).map((m) => m.name), models))}>
+                Select all in this pack
               </Button>
             </Group>
             {installable.map((m) => {
@@ -406,38 +599,104 @@ export function ModelsPage() {
               const requiredBy = checked ? stillRequired(m.model, installModels, models) : [];
               const onTenant = installing?.installed.some((i) => i.name.toLowerCase() === m.model.toLowerCase());
               const row = installing?.installed.find((i) => i.name.toLowerCase() === m.model.toLowerCase());
+              const packVer = versionInPack(selectedPack, m.model);
+              const inPack = Boolean(packVer);
+              const delta = inPack ? cmpVer(packVer, row?.version) : 0;
+              const versionOptions = [...m.versions]
+                .sort((a, b) => cmpVer(b.version, a.version))
+                .map((v) => ({ value: v.version, label: v.version }));
               return (
-                <Checkbox
-                  key={m.model}
-                  label={
+                <Group key={m.model} gap="sm" wrap="nowrap" align="flex-start">
+                  <Checkbox
+                    mt={6}
+                    checked={checked}
+                    disabled={!inPack || requiredBy.length > 0}
+                    onChange={(e) => toggleInstallModel(m.model, inputChecked(e))}
+                  />
+                  <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
                     <Group gap={8} wrap="wrap">
                       <Text size="sm">{m.model}</Text>
-                      <Text size="xs" c="dimmed">{m.latest}</Text>
-                      {row?.outdated && <Badge size="xs" color="yellow">outdated {row.version ?? '?'}</Badge>}
-                      {!onTenant && <Badge size="xs" color="gray">not installed</Badge>}
-                      {m.dependsOn.length > 0 && (
-                        <Text size="xs" c="dimmed">depends on {m.dependsOn.join(', ')}</Text>
+                      {onTenant && delta > 0 && (
+                        <Badge size="xs" color="teal">upgrade {row?.version ?? '?'} → {packVer}</Badge>
                       )}
-                      {(m.extends ?? []).length > 0 && (
-                        <Text size="xs" c="dimmed">extends {(m.extends ?? []).join(', ')}</Text>
+                      {onTenant && delta < 0 && (
+                        <Badge size="xs" color="orange">downgrade {row?.version ?? '?'} → {packVer}</Badge>
                       )}
+                      {onTenant && delta === 0 && inPack && (
+                        <Badge size="xs" color="gray" variant="light">same {packVer}</Badge>
+                      )}
+                      {!onTenant && inPack && <Badge size="xs" color="gray">not installed</Badge>}
+                      {!inPack && <Badge size="xs" color="gray">not in this pack</Badge>}
                       {requiredBy.length > 0 && (
                         <Text size="xs" c="dimmed">locked — {requiredBy.join(', ')} need this</Text>
                       )}
                     </Group>
-                  }
-                  checked={checked}
-                  disabled={requiredBy.length > 0}
-                  onChange={(e) => toggleInstallModel(m.model, inputChecked(e))}
-                />
+                    {m.dependsOn.length > 0 && (
+                      <Text size="xs" c="dimmed">depends on {m.dependsOn.join(', ')}</Text>
+                    )}
+                    {(m.extends ?? []).length > 0 && (
+                      <Text size="xs" c="dimmed">extends {(m.extends ?? []).join(', ')}</Text>
+                    )}
+                  </Stack>
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}>
+                    <Select
+                      size="xs"
+                      w={120}
+                      allowDeselect={false}
+                      comboboxProps={{ withinPortal: true }}
+                      data={versionOptions}
+                      value={packVer ?? null}
+                      disabled={versionOptions.length === 0}
+                      onChange={(ver) => { if (ver) pickModelVersion(m.model, ver); }}
+                    />
+                  </div>
+                </Group>
               );
             })}
           </Stack>
 
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => setInstalling(null)}>Cancel</Button>
-            <Button color="grape" disabled={installModels.length === 0} onClick={() => void install()}>
+            <Button variant="default" onClick={() => { setInstalling(null); setDropPackConfirm(''); }}>
+              Cancel
+            </Button>
+            <Button
+              color="grape"
+              disabled={installModels.length === 0 || !installImage
+                || installModels.some((n) => !versionInPack(selectedPack, n))}
+              onClick={() => void install()}>
               Install {installModels.length} model{installModels.length === 1 ? '' : 's'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={Boolean(removingPack)}
+        onClose={() => { setRemovingPack(null); setDropPackConfirm(''); }}
+        title={`Delete pack ${removingPack?.tag ?? ''}`}>
+        <Stack gap="sm">
+          <Alert color="red" icon={<IconAlertTriangle size={16} />}>
+            Removes <Code>{removingPack?.tag}</Code> from the registry. Tenants that
+            already installed these models keep them; you just cannot pick this pack
+            again until it is republished.
+          </Alert>
+          <TextInput
+            label={`Type "${removingPack?.tag ?? ''}" to confirm`}
+            value={dropPackConfirm}
+            onChange={(e) => setDropPackConfirm(e.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => { setRemovingPack(null); setDropPackConfirm(''); }}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              loading={droppingPack}
+              disabled={!removingPack || dropPackConfirm !== removingPack.tag}
+              onClick={() => { if (removingPack) void dropPack(removingPack); }}>
+              Delete pack
             </Button>
           </Group>
         </Stack>
@@ -451,8 +710,8 @@ export function ModelsPage() {
         <Stack gap="md">
           <Alert color="red" icon={<IconAlertTriangle size={16} />}>
             Cascade: metadata, extension fields on other objects, scripts, menus, and
-            the physical tables. A snapshot is taken first — that file is the only
-            undo, because the container does not change. Core and the tenant stand
+            the physical tables. A snapshot is taken first and restored automatically
+            if the delete or the compile afterwards fails. Core and the tenant stand
             model cannot be removed this way.
           </Alert>
           <TextInput
@@ -545,7 +804,7 @@ function TenantModelsDetail({
           <Table.Tr>
             <Table.Th>Model</Table.Th>
             <Table.Th>Installed</Table.Th>
-            <Table.Th>Latest</Table.Th>
+            <Table.Th>Available</Table.Th>
             <Table.Th>Depends on</Table.Th>
             <Table.Th>Compile</Table.Th>
             <Table.Th />
@@ -553,7 +812,9 @@ function TenantModelsDetail({
         </Table.Thead>
         <Table.Tbody>
           {rows.map((m) => {
-            const deps = catalogue.find((c) => c.model.toLowerCase() === m.name.toLowerCase())?.dependsOn ?? [];
+            const cat = catalogue.find((c) => c.model.toLowerCase() === m.name.toLowerCase());
+            const deps = cat?.dependsOn ?? [];
+            const available = [...(cat?.versions ?? [])].sort((a, b) => cmpVer(b.version, a.version));
             const holders = installedDependents(m.name, tenant, catalogue);
             const stand = (m.metaId ?? '').toLowerCase() === '7e2c1f0a-9b4d-4e6a-8c3f-1d5a7b9e2c40'
               || m.name.toLowerCase() === 'local'
@@ -573,8 +834,17 @@ function TenantModelsDetail({
                 </Table.Td>
                 <Table.Td>{m.version ?? '—'}</Table.Td>
                 <Table.Td>
-                  <Group gap={6}>
-                    <Text size="sm">{m.latest ?? '—'}</Text>
+                  <Group gap={4} wrap="wrap">
+                    {available.length === 0
+                      ? <Text size="sm">{m.latest ?? '—'}</Text>
+                      : available.map((v) => (
+                          <Badge
+                            key={v.version}
+                            size="xs"
+                            variant={v.version === m.version ? 'filled' : v.version === m.latest ? 'light' : 'outline'}>
+                            {v.version}
+                          </Badge>
+                        ))}
                     {m.outdated && <Badge size="xs" color="yellow">outdated</Badge>}
                   </Group>
                 </Table.Td>

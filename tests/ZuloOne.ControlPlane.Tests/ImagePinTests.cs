@@ -1,3 +1,4 @@
+using ZuloOne.ControlPlane.Api;
 using ZuloOne.ControlPlane.Provisioning;
 using Xunit;
 
@@ -46,4 +47,12 @@ public sealed class ImagePinTests
     [Fact]
     public void Empty_pin_never_matches()
         => Assert.False(ImagePin.Matches("", Pin, "sha256:abc", "sha256:abc"));
+
+    [Fact]
+    public void Distribution_repository_strips_the_core_suffix()
+        => Assert.Equal("zuloone", ImagesController.DistributionRepository("zuloone-core"));
+
+    [Fact]
+    public void Distribution_repository_is_null_when_the_fleet_is_not_a_core_pin()
+        => Assert.Null(ImagesController.DistributionRepository("zuloone"));
 }

@@ -403,6 +403,8 @@ export interface Images {
   keepUnusedReleases?: number;
   releases: ImageTag[];
   builds: ImageTag[];
+  /** Business-layer images (`zuloone:2026.0.N`), not the platform pin. */
+  distribution?: ImageTag[];
   error?: string;
 }
 

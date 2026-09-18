@@ -118,6 +118,7 @@ builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
 builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
 builder.Services.AddScoped<IJobHandler, UpgradeJobHandler>();
 builder.Services.AddScoped<IJobHandler, RolloutJobHandler>();
+        builder.Services.AddScoped<LiveSnapshotRestore>();
         builder.Services.AddScoped<IJobHandler, InstallModelsJobHandler>();
         builder.Services.AddScoped<IJobHandler, UninstallModelsJobHandler>();
         builder.Services.AddScoped<IJobHandler, CompileModelsJobHandler>();
