@@ -43,6 +43,12 @@ public class ControlPlaneDbContext : DbContext
     /// </summary>
     public DbSet<Settings.Setting> Settings => Set<Settings.Setting>();
 
+    /// <summary>
+    /// Requests for a demo workspace, including the ones that never got one.
+    /// Both the queue and the record of who asked.
+    /// </summary>
+    public DbSet<DemoRequest> DemoRequests => Set<DemoRequest>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -52,6 +58,22 @@ public class ControlPlaneDbContext : DbContext
         modelBuilder.Entity<Tenant>().Property(t => t.Status).HasConversion<string>();
         modelBuilder.Entity<Tenant>().Property(t => t.Health).HasConversion<string>();
         modelBuilder.Entity<Tenant>().Property(t => t.Origin).HasConversion<string>();
+        modelBuilder.Entity<Tenant>().Property(t => t.Demo).HasConversion<string>();
+
+        // The reaper's only query: rows that are demos and are out of time. It
+        // runs on a timer forever, against a table that is mostly NOT demos, so
+        // it is the one place here that would notice a missing index.
+        modelBuilder.Entity<Tenant>().HasIndex(t => new { t.Demo, t.ExpiresAt });
+
+        modelBuilder.Entity<DemoRequest>().Property(r => r.State).HasConversion<string>();
+        // The queue, oldest first.
+        modelBuilder.Entity<DemoRequest>().HasIndex(r => new { r.State, r.CreatedAt });
+        // The two quota questions, both asked on every public request: has this
+        // address already had a workspace today, and has this source address.
+        modelBuilder.Entity<DemoRequest>().HasIndex(r => new { r.Email, r.CreatedAt });
+        modelBuilder.Entity<DemoRequest>().HasIndex(r => new { r.SourceIp, r.CreatedAt });
+        // No foreign key to Tenant. A request outlives the workspace it was given
+        // — that is the entire point of keeping it.
 
         // Stored as text, like the tenant's enums: a job history is read by humans
         // during an incident, and an integer there means consulting the source to

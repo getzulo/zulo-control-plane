@@ -50,6 +50,34 @@ public enum TenantOrigin
 }
 
 /// <summary>
+/// What kind of demo workspace this row is — or null for every real tenant.
+/// </summary>
+/// <remarks>
+/// An enum rather than a <c>bool IsDemo</c> because the pool needs to tell
+/// "warm, nobody's yet" from "handed to a person", and because
+/// <see cref="Golden"/> has to be a state the reaper can refuse structurally.
+/// Refusing by remembering a slug would work until somebody renamed it.
+/// </remarks>
+public enum TenantDemo
+{
+    /// <summary>
+    /// The hand-curated source every demo is cloned from. Never reaped, never
+    /// claimed — it is an ordinary operator tenant that happens to be the
+    /// template's origin.
+    /// </summary>
+    Golden,
+
+    /// <summary>Built ahead of demand. Live, but nobody has its address yet.</summary>
+    Pooled,
+
+    /// <summary>
+    /// Handed to a visitor. <see cref="Tenant.ExpiresAt"/> stopped being an
+    /// internal housekeeping date and became a promise to a person.
+    /// </summary>
+    Claimed,
+}
+
+/// <summary>
 /// One customer instance: a container, its own database and a subdomain
 /// (docs/architecture/ControlPlane.Deployment.md §2). This row is what lets the
 /// fleet be rebuilt after a control-plane restart — it is the only place that
@@ -232,6 +260,46 @@ public class Tenant
     /// container recreate — env is read at process start.
     /// </summary>
     public bool DeveloperStand { get; set; }
+
+    /// <summary>
+    /// Whether this row is a demo workspace, and which kind. NULL for every real
+    /// tenant — the same "null means not my business" shape <see cref="Models"/>
+    /// uses, so nothing that existed before this column changes behaviour.
+    /// </summary>
+    public TenantDemo? Demo { get; set; }
+
+    /// <summary>
+    /// When this tenant stops being allowed to exist. NULL means forever, which
+    /// is every customer and the golden tenant.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The clock lives on the thing that consumes the resources, not on the
+    /// request that asked for it. A demo's request row can be purged, archived or
+    /// never have existed (an operator can build one by hand), and the reaper
+    /// must still be able to free the container, the database, the role and the
+    /// journal. Anything else makes cleanup depend on bookkeeping.
+    /// </para>
+    /// <para>
+    /// Deliberately not named <c>DemoExpiresAt</c>: a paid trial is the same
+    /// column with <see cref="Demo"/> null, and renaming it later would cost a
+    /// migration for nothing.
+    /// </para>
+    /// </remarks>
+    public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>When a pooled demo was handed to somebody. NULL while pooled.</summary>
+    public DateTime? ClaimedAt { get; set; }
+
+    /// <summary>
+    /// The request that claimed this demo — the public bridge's idempotency key.
+    /// </summary>
+    /// <remarks>
+    /// Not a foreign key, for the same reason Jobs and Snapshots have none: the
+    /// request is history and outlives the tenant on purpose. A cascade would
+    /// erase the record of who was given what.
+    /// </remarks>
+    public Guid? DemoRequestId { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

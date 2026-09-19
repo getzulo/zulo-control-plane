@@ -207,6 +207,9 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<DateTime?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("ContainerId")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
@@ -226,12 +229,21 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
                         .HasMaxLength(63)
                         .HasColumnType("character varying(63)");
 
+                    b.Property<string>("Demo")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("DemoRequestId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("DeveloperStand")
                         .HasColumnType("boolean");
 
                     b.Property<string>("DisplayName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Health")
                         .IsRequired()
@@ -307,10 +319,70 @@ namespace ZuloOne.ControlPlane.Registry.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Demo", "ExpiresAt");
+
                     b.HasIndex("Slug")
                         .IsUnique();
 
                     b.ToTable("Tenants");
+                });
+
+            modelBuilder.Entity("ZuloOne.ControlPlane.Registry.DemoRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Company")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(2)
+                        .HasColumnType("character varying(2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
+                    b.Property<string>("Locale")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("ReadyAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SourceIp")
+                        .HasMaxLength(45)
+                        .HasColumnType("character varying(45)");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TenantSlug")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Email", "CreatedAt");
+
+                    b.HasIndex("SourceIp", "CreatedAt");
+
+                    b.HasIndex("State", "CreatedAt");
+
+                    b.ToTable("DemoRequests");
                 });
 
             modelBuilder.Entity("ZuloOne.ControlPlane.Snapshots.Snapshot", b =>
