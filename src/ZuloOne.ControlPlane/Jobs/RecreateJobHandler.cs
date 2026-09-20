@@ -47,7 +47,7 @@ public sealed class RecreateJobHandler : IJobHandler
         await context.StepAsync($"Recreating {tenant.Slug} on {tenant.ImageTag}", 30, ct);
         var connection = _databases.TenantConnectionString(
             tenant.DatabaseName!, tenant.DatabaseRole!, tenant.DatabasePassword ?? string.Empty);
-        tenant.ContainerId = await _containers.RunAsync(tenant, connection, ct);
+        tenant.ContainerId = await _containers.RunAsync(tenant, connection, ct: ct);
         tenant.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 

@@ -84,7 +84,22 @@ public sealed class TenantContainerService
     }
 
     /// <summary>Creates and starts the tenant's container; returns its id.</summary>
-    public async Task<string> RunAsync(Tenant tenant, string connectionString, CancellationToken ct = default)
+    /// <summary>Cores to Docker's nano-CPUs. Zero stays zero, which is unlimited.</summary>
+    private static long NanoCpusFor(decimal cores) =>
+        cores > 0 ? (long)(cores * 1_000_000_000m) : 0;
+
+    /// <param name="limits">
+    /// What this container may consume, or null to use the fleet-wide settings.
+    /// Declared BEFORE <paramref name="ct"/> deliberately: every existing caller
+    /// passes the token positionally, so adding it here breaks them at compile
+    /// time rather than silently rebinding the token to this parameter. Six named
+    /// call sites reviewed beats five silently changed.
+    /// </param>
+    public async Task<string> RunAsync(
+        Tenant tenant,
+        string connectionString,
+        ContainerLimits? limits = null,
+        CancellationToken ct = default)
     {
         var name = $"zuloone-tenant-{tenant.Slug}";
         var host = HostFor(tenant.Slug);
@@ -174,8 +189,13 @@ public sealed class TenantContainerService
             HostConfig = new HostConfig
             {
                 RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
-                Memory = _fleet.MemoryLimitBytes,
-                NanoCPUs = _fleet.CpuLimit > 0 ? (long)(_fleet.CpuLimit * 1_000_000_000m) : 0,
+                Memory = limits?.MemoryBytes ?? _fleet.MemoryLimitBytes,
+                NanoCPUs = NanoCpusFor(limits?.Cpu ?? _fleet.CpuLimit),
+                // Unset for a normal tenant, which is Docker's unlimited. Set for a
+                // demo, where the container is handed to a stranger who can compile
+                // and run C# in it — and memory and CPU ceilings do not stop a fork
+                // bomb from exhausting the host's process table.
+                PidsLimit = limits?.PidsLimit,
                 NetworkMode = _fleet.EdgeNetwork,
                 // The data-protection key ring, on a named volume per tenant.
                 //

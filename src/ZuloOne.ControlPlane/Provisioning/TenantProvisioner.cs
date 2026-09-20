@@ -132,7 +132,7 @@ public sealed class TenantProvisioner
             }
 
             if (job is not null) await job.StepAsync("Starting the container", 25, ct);
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
             await SaveAsync(tenant, ct);
 
             // First boot runs migrations, schema sync and a metadata compile, so

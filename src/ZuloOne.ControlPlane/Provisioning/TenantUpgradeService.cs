@@ -154,7 +154,7 @@ public sealed class TenantUpgradeService
         var ready = false;
         try
         {
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
             await _db.SaveChangesAsync(ct);
 
             await Step("waiting for it to come up", 65, ct);
@@ -216,7 +216,7 @@ public sealed class TenantUpgradeService
         if (setModels) tenant.Models = previousModels;
         try
         {
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, CancellationToken.None);
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: CancellationToken.None);
             await _db.SaveChangesAsync(CancellationToken.None);
             var back = await _health.WaitUntilReadyAsync(
                 _containers.HostFor(tenant.Slug), TimeSpan.FromSeconds(_fleet.ReadinessTimeoutSeconds), CancellationToken.None);

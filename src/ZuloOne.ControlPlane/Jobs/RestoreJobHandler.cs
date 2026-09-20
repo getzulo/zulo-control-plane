@@ -145,7 +145,7 @@ public sealed class RestoreJobHandler : IJobHandler
             if (!ok) throw new InvalidOperationException("pg_restore failed — see the log above.");
 
             await context.StepAsync("Starting the container", 60, ct);
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
             await _db.SaveChangesAsync(ct);
 
             // THE quick check. First boot runs migrations against the restored data,

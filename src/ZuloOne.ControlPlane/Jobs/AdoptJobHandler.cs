@@ -97,7 +97,7 @@ public sealed class AdoptJobHandler : IJobHandler
             await context.LogAsync($"Removed the original container {original![..Math.Min(12, original.Length)]}.", ct);
         }
 
-        tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct);
+        tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
         await _db.SaveChangesAsync(ct);
 
         await context.StepAsync($"Waiting for {tenant.Slug} to answer", 75, ct);
