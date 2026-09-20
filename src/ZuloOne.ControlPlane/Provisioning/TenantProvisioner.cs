@@ -73,6 +73,14 @@ public sealed class TenantProvisioner
         // provisions directly would otherwise bypass the check entirely.
         if (ReservedSlugs.IsReserved(slug))
             throw new ArgumentException($"Slug '{slug}' is reserved for the platform.", nameof(slug));
+        // The demo pool's namespace, claimed here for the same reason and in the
+        // same place. `demo` itself IS a reserved name, but ReservedSlugs matches
+        // whole names — so `demo-acme` would sail through and collide with a
+        // pooled workspace about to be minted under the same prefix.
+        if (Demo.DemoSlug.IsDemoSlug(slug))
+            throw new ArgumentException(
+                $"Slug '{slug}' is in the demo pool's namespace. Demo workspaces are created by the pool, not by hand.",
+                nameof(slug));
         if (await _db.Tenants.AnyAsync(t => t.Slug == slug, ct))
             throw new InvalidOperationException($"Tenant '{slug}' already exists.");
 

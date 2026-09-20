@@ -64,6 +64,17 @@ jobs:
       - name: Build
         run: dotnet build src/ZuloOne.ControlPlane/ZuloOne.ControlPlane.csproj -c Release
 
+      # The test project existed for months and this pipeline never ran it —
+      # there is no solution file, and the build step above names only the app.
+      # Unit tests nobody executes are documentation with a compiler, so the
+      # step is here before any more of them get written.
+      #
+      # Pointed at the csproj rather than a new .sln deliberately: a solution
+      # file would be a second place to remember to add projects to, and this
+      # repository has exactly two.
+      - name: Test
+        run: dotnet test tests/ZuloOne.ControlPlane.Tests/ZuloOne.ControlPlane.Tests.csproj -c Release
+
       # Non-blocking on purpose. .NET 9+ enables NuGet Audit by default, and a
       # third party's advisory landing overnight must not become our outage.
       - name: Vulnerable packages (advisory only)
