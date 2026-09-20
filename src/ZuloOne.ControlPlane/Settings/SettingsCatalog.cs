@@ -90,6 +90,12 @@ public sealed record SettingDef(
 /// the panel at a directory the container does not have.
 /// </item>
 /// <item>
+/// <c>Demo:RequestToken</c> — the shared secret that opens the only anonymous
+/// write path into the panel. Same reasoning as <c>Access:*</c>: a credential
+/// that admits the public must not be editable from a screen that credential
+/// could one day reach.
+/// </item>
+/// <item>
 /// <c>Mail:Password</c> — the panel has no data-protection key ring, so an
 /// encrypted secret would mean new infrastructure with a new way to fail (lose
 /// the ring, lose the value), and a plaintext one would ride into every dump and
@@ -103,6 +109,7 @@ public static class SettingsCatalog
     public const string Fleet = "Fleet and provisioning";
     public const string Monitoring = "Monitoring thresholds";
     public const string Mail = "Mail";
+    public const string Demo = "Demo workspaces";
 
     public static readonly IReadOnlyList<SettingDef> All =
     [
@@ -234,6 +241,112 @@ public static class SettingsCatalog
             "When off, a new tenant's administrator password is shown once in the panel and never "
             + "sent. That is a working arrangement, not a degraded one.",
             SettingKind.Bool, "false"),
+
+        // --------------------------------------------------------------- Demo
+        new("Demo:Enabled", Demo,
+            "Demo workspaces",
+            "Master switch. Off means the public endpoint answers 503, the pool service idles, "
+            + "and nothing is ever reaped — an unconfigured feature refuses rather than half-runs.",
+            SettingKind.Bool, "false"),
+
+        new("Demo:GoldenSlug", Demo,
+            "Golden tenant",
+            "The hand-curated workspace every demo is cloned from. An ordinary operator tenant "
+            + "that happens to be the template's origin; it is never reaped and never handed out.",
+            SettingKind.Text, "showcase"),
+
+        new("Demo:TemplateSnapshotId", Demo,
+            "Template snapshot",
+            "Which snapshot of the golden tenant new demos are built from. Written by the "
+            + "template refresh job; set by hand only to pin an older one deliberately.",
+            SettingKind.Text, ""),
+
+        new("Demo:PoolTarget", Demo,
+            "Keep this many ready",
+            "Pre-built demos waiting to be claimed. This is what makes a demo instant: a visitor "
+            + "gets a workspace that already exists instead of waiting out a provision.",
+            SettingKind.Int, "2", Min: 0, Max: 20),
+
+        new("Demo:MaxConcurrent", Demo,
+            "Never more than",
+            "Hard ceiling on live demos, pooled and claimed together. Excludes the golden tenant. "
+            + "Every demo is a real container and a real database on the app host, so this is the "
+            + "actual capacity control — everything else is friction.",
+            SettingKind.Int, "6", Min: 0, Max: 50),
+
+        new("Demo:MaxQueue", Demo,
+            "Queue at most",
+            "Past this many waiting requests the answer is a plain \"full, try later\" rather than "
+            + "a longer wait. A queue nobody will reach the end of is a worse answer than no.",
+            SettingKind.Int, "20", Min: 0, Max: 200),
+
+        new("Demo:LifetimeHours", Demo,
+            "A demo lasts",
+            "Measured from the moment it is CLAIMED, not built — the clock is a promise to the "
+            + "person who was given it, and time spent sitting in the pool is not theirs.",
+            SettingKind.Hours, "24", Min: 1, Max: 168),
+
+        new("Demo:PoolMaxAgeHours", Demo,
+            "Rebuild unclaimed after",
+            "An unclaimed demo is capacity too, and it drifts from the template as the golden "
+            + "tenant moves on. Past this age it is retired and a fresh one takes its place.",
+            SettingKind.Hours, "72", Min: 1, Max: 720),
+
+        new("Demo:MaxExtendHours", Demo,
+            "Operator may extend by at most",
+            "The escape hatch for a live sales call. Bounded so that extending cannot quietly "
+            + "turn a throwaway into a tenant nobody is accounting for.",
+            SettingKind.Hours, "48", Min: 0, Max: 336),
+
+        new("Demo:ReapIntervalSeconds", Demo,
+            "Check for expiry every",
+            "How often the pool service reconciles: reap what is out of time, serve the queue, "
+            + "top the pool back up.",
+            SettingKind.Seconds, "60", Min: 15, Max: 3600),
+
+        new("Demo:MaxPerEmailPerDay", Demo,
+            "Per e-mail address, per day",
+            "Counted against demo requests, not against tenants — a refused request still counts, "
+            + "which is what makes the limit hold.",
+            SettingKind.Int, "1", Min: 1, Max: 20),
+
+        new("Demo:MaxPerIpPerDay", Demo,
+            "Per source address, per day",
+            "The quota that actually matters: edge rate limits are bypassed by anyone who finds "
+            + "the origin, and the origin is one firewall rule away from being found.",
+            SettingKind.Int, "3", Min: 1, Max: 50),
+
+        new("Demo:PasswordWindowMinutes", Demo,
+            "Password readable for",
+            "How long a claimed demo's password can still be re-read. Deliberately NOT the "
+            + "read-once rule used for an admin password: read-once is right when a human clicks a "
+            + "button and sees a modal, and wrong across a network hop, where a dropped response "
+            + "would cost the visitor the demo they just asked for with no way to recover.",
+            SettingKind.Int, "10", Min: 1, Max: 120),
+
+        new("Demo:MemoryLimitBytes", Demo,
+            "Memory per demo",
+            "Demo containers get their own limit, unlike tenants, which currently run unbounded. "
+            + "A demo hands a stranger a script editor that compiles C# on the app host — the host "
+            + "that also runs every paying tenant and the proxy.",
+            SettingKind.Bytes, "805306368", Min: 268435456),
+
+        new("Demo:CpuMilli", Demo,
+            "CPU per demo",
+            "In thousandths of a core: 1000 is one core. Same reasoning as the memory limit.",
+            SettingKind.Int, "1000", Min: 100, Max: 8000),
+
+        new("Demo:PidsLimit", Demo,
+            "Processes per demo",
+            "Caps the fork bomb that memory and CPU limits do not stop.",
+            SettingKind.Int, "256", Min: 32, Max: 4096),
+
+        new("Demo:UserName", Demo,
+            "Demo account",
+            "The account inside the golden snapshot whose password is reset when a demo is built "
+            + "and again when it is claimed. Twice, so the value handed over existed nowhere "
+            + "before — not in the dump, and not while the workspace sat in the pool.",
+            SettingKind.Text, "demo"),
 
         new("Mail:Host", Mail, "SMTP host", "Leave empty to disable sending entirely.", SettingKind.Text, ""),
         new("Mail:Port", Mail, "SMTP port", "587 for STARTTLS, 465 for implicit TLS.", SettingKind.Int, "587", Min: 1, Max: 65535),

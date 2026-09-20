@@ -8,6 +8,7 @@ using ZuloOne.ControlPlane.Auth;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
+using ZuloOne.ControlPlane.Provisioning.Demo;
 using ZuloOne.ControlPlane.Registry;
 using ZuloOne.ControlPlane.Snapshots;
 
@@ -64,6 +65,10 @@ builder.Services.Configure<FleetSettings>(builder.Configuration.GetSection("Flee
 // frozen at startup, and the settings screen writes to a table. Singleton because
 // it holds no state of its own — both of its sources are singletons.
 builder.Services.AddSingleton<FleetConfig>();
+builder.Services.Configure<DemoSettings>(builder.Configuration.GetSection("Demo"));
+// Same split as FleetConfig: policy from the settings store so the panel can
+// change it, the one credential bound at startup from cp.env.
+builder.Services.AddSingleton<DemoConfig>();
 builder.Services.Configure<TenantDatabaseSettings>(builder.Configuration.GetSection("TenantDatabase"));
 builder.Services.Configure<TenantLogSettings>(builder.Configuration.GetSection("TenantLogs"));
 builder.Services.AddMemoryCache();
