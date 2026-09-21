@@ -98,6 +98,7 @@ builder.Services.AddHttpClient("tenant", client => client.Timeout = TimeSpan.Fro
 builder.Services.AddScoped<TenantDatabaseProvisioner>();
 builder.Services.AddScoped<TenantLogDatabaseProvisioner>();
 builder.Services.AddScoped<TenantContainerService>();
+builder.Services.AddScoped<TenantCloneService>();
 builder.Services.AddScoped<DemoPool>();
 builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantStatsService>();

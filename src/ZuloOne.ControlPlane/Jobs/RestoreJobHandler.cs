@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ZuloOne.ControlPlane.Provisioning;
@@ -30,36 +29,19 @@ public sealed record RestorePayload(Guid SnapshotId);
 /// </summary>
 public sealed class RestoreJobHandler : IJobHandler
 {
-    // Deliberately unambiguous characters. This name ends up in a hostname an
-    // operator reads off a screen and types, usually while something is wrong, and
-    // 0/O and 1/l are how that goes wrong.
-    private const string SlugAlphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-
     private readonly ControlPlaneDbContext _db;
-    private readonly TenantDatabaseProvisioner _databases;
-    private readonly TenantLogDatabaseProvisioner _logDatabases;
-    private readonly TenantContainerService _containers;
-    private readonly TenantHealthProbe _health;
-    private readonly PgTools _pg;
+    private readonly TenantCloneService _clone;
     private readonly SnapshotSettings _snapshots;
     private readonly FleetConfig _fleet;
 
     public RestoreJobHandler(
         ControlPlaneDbContext db,
-        TenantDatabaseProvisioner databases,
-        TenantLogDatabaseProvisioner logDatabases,
-        TenantContainerService containers,
-        TenantHealthProbe health,
-        PgTools pg,
+        TenantCloneService clone,
         IOptions<SnapshotSettings> snapshots,
         FleetConfig fleet)
     {
         _db = db;
-        _databases = databases;
-        _logDatabases = logDatabases;
-        _containers = containers;
-        _health = health;
-        _pg = pg;
+        _clone = clone;
         _snapshots = snapshots.Value;
         _fleet = fleet;
     }
@@ -93,7 +75,10 @@ public sealed class RestoreJobHandler : IJobHandler
             .Select(t => t.Models)
             .FirstOrDefaultAsync(ct);
 
-        var slug = await UniqueSlugAsync(ct);
+        // Random, because the copy is disposable and naming it after the original
+        // invites someone to mistake one for the other — but prefixed, so that a
+        // stray container is recognisable for what it is months later.
+        var slug = await _clone.UniqueSlugAsync("restore", ct);
         await context.StepAsync($"Creating the scratch tenant {slug}", 5, ct);
         await context.LogAsync(
             $"Restoring {snapshot.TenantSlug} as of {snapshot.CreatedAt:u} on image {imageTag}.", ct);
@@ -102,111 +87,17 @@ public sealed class RestoreJobHandler : IJobHandler
         {
             Slug = slug,
             DisplayName = $"Restore of {snapshot.TenantSlug} ({snapshot.CreatedAt:yyyy-MM-dd HH:mm} UTC)",
-            Status = TenantStatus.Provisioning,
             ImageTag = imageTag,
             Models = sourceModels,
-            // A KEY OF ITS OWN, never the original's. A token minted in the copy must
-            // not be valid against the live tenant: the copy exists to be poked at,
-            // often by more people than usually touch production, and a shared key
-            // would make compromising the scratch copy equivalent to compromising the
-            // real thing.
-            JwtSigningKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48)),
             RestoredFromSlug = snapshot.TenantSlug,
             RestoredFromSnapshotId = snapshot.Id,
             RestoredAt = DateTime.UtcNow,
         };
-        _db.Tenants.Add(tenant);
-        await _db.SaveChangesAsync(ct);
 
-        try
-        {
-            await context.StepAsync("Creating the database", 15, ct);
-            var (database, role, password, connectionString) = await _databases.CreateAsync(slug, ct);
-            tenant.DatabaseName = database;
-            tenant.DatabaseRole = role;
-            tenant.DatabasePassword = password;
-            await _db.SaveChangesAsync(ct);
+        await _clone.CloneAsync(context, tenant, file, snapshot.SizeBytes, "scratch tenant", ct);
 
-            var logDatabase = await _logDatabases.CreateAsync(slug, ct);
-            if (logDatabase is not null)
-            {
-                tenant.LogDatabase = logDatabase.Database;
-                tenant.LogUser = logDatabase.User;
-                tenant.LogPassword = logDatabase.Password;
-                await _db.SaveChangesAsync(ct);
-            }
-
-            await context.StepAsync($"Loading {snapshot.SizeBytes / 1024} KB into {database}", 30, ct);
-            // As the NEW role, so every restored object is owned by it from the
-            // start. Loading as the admin role would leave the tenant unable to
-            // alter its own tables on first boot.
-            var (ok, output) = await _pg.RestoreAsync(_pg.ConnectionString(database, role, password), file, ct);
-            if (!string.IsNullOrWhiteSpace(output)) await context.LogAsync(output.Trim(), ct);
-            if (!ok) throw new InvalidOperationException("pg_restore failed — see the log above.");
-
-            await context.StepAsync("Starting the container", 60, ct);
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
-            await _db.SaveChangesAsync(ct);
-
-            // THE quick check. First boot runs migrations against the restored data,
-            // so a dump that cannot carry the tenant forward fails HERE, on a copy,
-            // rather than after it has replaced the live database.
-            await context.StepAsync($"Waiting for it to answer (up to {_fleet.ReadinessTimeoutSeconds}s)", 75, ct);
-            var ready = await _health.WaitUntilReadyAsync(
-                _containers.HostFor(slug), TimeSpan.FromSeconds(_fleet.ReadinessTimeoutSeconds), ct);
-            if (!ready)
-                throw new TimeoutException(
-                    $"The restored copy never reported ready. The data loaded, but this image could not boot on it — do NOT swap it in.");
-
-            tenant.Status = TenantStatus.Active;
-            tenant.Health = TenantHealth.Ok;
-            tenant.LastHealthAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
-
-            await context.StepAsync($"Ready at https://{_containers.HostFor(slug)}", 100, ct);
-            await context.LogAsync(
-                "Sign in and confirm the data is what you expected. Nothing has touched the live tenant. " +
-                "When satisfied, swap it in; otherwise discard this copy.", ct);
-        }
-        catch
-        {
-            // CancellationToken.None: the scratch tenant must not survive its own
-            // failed creation just because the caller went away.
-            tenant.Status = TenantStatus.Failed;
-            await _db.SaveChangesAsync(CancellationToken.None);
-            await context.LogAsync("Rolling back the scratch tenant.", CancellationToken.None);
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(tenant.ContainerId))
-                    await _containers.RemoveAsync(tenant.ContainerId!, CancellationToken.None);
-                await _logDatabases.DropAsync(tenant.LogDatabase, tenant.LogUser, CancellationToken.None);
-                await _databases.DropAsync(tenant.DatabaseName, tenant.DatabaseRole, CancellationToken.None);
-                _db.Tenants.Remove(tenant);
-                await _db.SaveChangesAsync(CancellationToken.None);
-            }
-            catch (Exception cleanup)
-            {
-                await context.LogAsync($"Rollback was incomplete: {cleanup.Message}", CancellationToken.None);
-            }
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// <c>restore-xxxxxx</c>. Random, because the copy is disposable and naming it
-    /// after the original invites someone to mistake one for the other — but
-    /// prefixed, so that a stray container is recognisable for what it is months
-    /// later.
-    /// </summary>
-    private async Task<string> UniqueSlugAsync(CancellationToken ct)
-    {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            var suffix = string.Concat(Enumerable.Range(0, 6)
-                .Select(_ => SlugAlphabet[RandomNumberGenerator.GetInt32(SlugAlphabet.Length)]));
-            var slug = $"restore-{suffix}";
-            if (!await _db.Tenants.AnyAsync(t => t.Slug == slug, ct)) return slug;
-        }
-        throw new InvalidOperationException("Could not find a free slug for the restored copy.");
+        await context.LogAsync(
+            "Sign in and confirm the data is what you expected. Nothing has touched the live tenant. " +
+            "When satisfied, swap it in; otherwise discard this copy.", ct);
     }
 }
