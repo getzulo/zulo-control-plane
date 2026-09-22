@@ -10,6 +10,14 @@ public static class AuthSetup
 {
     public const string AccessScheme = "CloudflareAccess";
 
+    /// <summary>
+    /// The only policy that admits a customer. Names the portal scheme and
+    /// nothing else, so it cannot be satisfied by an operator credential — and,
+    /// because it is not in the default or fallback policy, a customer credential
+    /// cannot satisfy anything else.
+    /// </summary>
+    public const string PortalPolicy = "Portal";
+
     public static IServiceCollection AddControlPlaneAuth(
         this IServiceCollection services, IConfiguration configuration, ILogger logger)
     {
@@ -25,6 +33,17 @@ public static class AuthSetup
 
         auth.AddScheme<AuthenticationSchemeOptions, OperatorSessionHandler>(
             OperatorSessionHandler.SchemeName, _ => { });
+
+        // The customer portal's scheme. Registered so its own endpoints can name
+        // it, and — the part that matters — NEVER added to the policies below.
+        //
+        // A customer token presented to /api/tenants therefore does not
+        // authenticate: the only scheme that could validate it is not among the
+        // ones the policy asks. That is a structural separation rather than a
+        // check each controller has to remember, which is the whole reason the
+        // portal is a second scheme instead of a claim on this one.
+        auth.AddScheme<AuthenticationSchemeOptions, Portal.PortalSessionHandler>(
+            Portal.PortalSessionHandler.SchemeName, _ => { });
 
         if (access.IsConfigured)
         {
@@ -148,7 +167,23 @@ public static class AuthSetup
 
         services.AddAuthorizationBuilder()
             .SetDefaultPolicy(either)
-            .SetFallbackPolicy(either);
+            .SetFallbackPolicy(either)
+            // The portal's own policy, and it must be a NAMED POLICY rather than
+            // [Authorize(AuthenticationSchemes = ...)] on the controller.
+            //
+            // Those are not equivalent. An attribute that names only schemes
+            // leaves AuthorizationPolicy.CombineAsync with useDefaultPolicy still
+            // true, so it folds in the default policy — and Combine UNIONS the
+            // scheme lists. The portal's endpoints would have ended up accepting
+            // CloudflareAccess and OperatorSession as well, which is the opposite
+            // of the separation this whole arrangement exists for, arrived at
+            // silently and with a comment claiming otherwise.
+            //
+            // Naming a policy sets useDefaultPolicy false, so the scheme list stays
+            // exactly the one below.
+            .AddPolicy(PortalPolicy, policy => policy
+                .AddAuthenticationSchemes(Portal.PortalSessionHandler.SchemeName)
+                .RequireAuthenticatedUser());
 
         return services;
     }

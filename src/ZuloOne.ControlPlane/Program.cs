@@ -44,6 +44,26 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
         }));
+
+    // The customer portal's anonymous endpoints. Same partitioning reasoning as
+    // above — CF-Connecting-IP first, because behind Cloudflare RemoteIpAddress is
+    // an edge address shared by the world.
+    options.AddPolicy(ZuloOne.ControlPlane.Portal.PortalRateLimit.Policy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                // Looser than the operator's five, because one window covers
+                // register, verify, sign in and reset, and a real person touches
+                // several of those in a minute. The control that actually stops a
+                // determined attacker is the per-account lockout, which cannot be
+                // sidestepped by rotating addresses; this protects the CPU.
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
 });
 
 // In production the control plane serves the dashboard itself (same origin); this
@@ -110,6 +130,14 @@ builder.Services.AddScoped<TenantApiClient>();
 builder.Services.AddScoped<TenantAdminService>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();
+
+// The customer portal: the same fleet, seen by the people who pay for one stand
+// of it. Off unless Portal:Enabled — see PortalSettings for why that default is
+// false and what has to be true at the edge before it is turned on.
+builder.Services.Configure<ZuloOne.ControlPlane.Portal.PortalSettings>(
+    builder.Configuration.GetSection("Portal"));
+builder.Services.AddScoped<ZuloOne.ControlPlane.Portal.PortalMailer>();
+builder.Services.AddScoped<ZuloOne.ControlPlane.Portal.TenantClaimService>();
 
 // Everything that takes minutes goes through one durable queue: provisioning today,
 // plus snapshots, restores, upgrades, backups and switchovers. The jobs are ROWS,
@@ -184,6 +212,34 @@ using (var scope = app.Services.CreateScope())
 // simply means every key falls through to cp.env exactly as before.
 await app.Services.GetRequiredService<ZuloOne.ControlPlane.Settings.SettingsStore>().ReloadAsync();
 
+// Say out loud whether the customer portal answers, because nothing else will.
+// Its endpoints 404 when it is off, which is indistinguishable from a routing
+// mistake to whoever is testing the sign-up page.
+{
+    var portal = app.Services
+        .GetRequiredService<IOptions<ZuloOne.ControlPlane.Portal.PortalSettings>>().Value;
+    var log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ControlPlane.Portal");
+
+    if (!portal.Enabled)
+    {
+        log.LogInformation("Customer portal is OFF (Portal:Enabled) — /api/portal answers 404");
+    }
+    else if (string.IsNullOrWhiteSpace(portal.PublicUrl))
+    {
+        // Not a warning but an error: the portal is serving, and every letter it
+        // sends carries a link with no host. People can register and then cannot
+        // finish, which looks like a mail delivery problem and is not one.
+        log.LogError(
+            "Customer portal is ON but Portal:PublicUrl is empty — verification and reset links will have no host and nobody will be able to finish signing up");
+    }
+    else
+    {
+        log.LogWarning(
+            "Customer portal is ON at {Url}. It is reachable by people who are not staff, so Cloudflare Access must be configured to BYPASS /api/portal and /portal — otherwise Access blocks every customer before the request arrives here.",
+            portal.PublicUrl);
+    }
+}
+
 // Static files BEFORE authentication: they are middleware rather than endpoints,
 // so they bypass the authorization policy entirely and the dashboard can load its
 // own assets without a credential. That is what lets a login screen render at all.
@@ -245,6 +301,28 @@ app.MapFallback("{*path}", async context =>
     }
 
     var index = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html");
+
+    // /portal is a SECOND single-page app, not a route inside the dashboard.
+    // Without this branch the dashboard's index.html would answer at
+    // /portal/verify, and the customer clicking the link in their e-mail would
+    // land on an operator login screen — carrying their verification token in the
+    // query string of a page that has no idea what to do with it.
+    if (path.StartsWithSegments("/portal"))
+    {
+        var portalIndex = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "portal.html");
+        if (File.Exists(portalIndex))
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.SendFileAsync(portalIndex);
+            return;
+        }
+
+        // Falling through to the dashboard here would be worse than a 404: it
+        // would look like the portal worked and then behave like the panel.
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
     if (!File.Exists(index))
     {
         context.Response.StatusCode = StatusCodes.Status404NotFound;

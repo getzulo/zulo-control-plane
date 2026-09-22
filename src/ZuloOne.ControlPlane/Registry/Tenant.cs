@@ -164,6 +164,27 @@ public class Tenant
     [MaxLength(50)]
     public string? Plan { get; set; }
 
+    /// <summary>
+    /// True when <see cref="TenantStatus.Suspended"/> was reached by the customer
+    /// pressing stop in their own portal, rather than by an operator.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this the two are indistinguishable, and that ambiguity is
+    /// load-bearing in the wrong direction: Suspended is also what an operator
+    /// sets when a subscription is not settled, and the portal's whole licence
+    /// gate rests on a suspended stand being read-only. A plain "start" button
+    /// would then be a one-click way out of suspension for non-payment.
+    /// </para>
+    /// <para>
+    /// A bool rather than a second status value on purpose. Every existing row is
+    /// false, which is the correct reading of history — nothing was ever stopped
+    /// from a portal that did not exist — and no query that branches on
+    /// <see cref="Status"/> has to learn a new case.
+    /// </para>
+    /// </remarks>
+    public bool StoppedByCustomer { get; set; }
+
     public TenantHealth Health { get; set; } = TenantHealth.Unknown;
 
     /// <summary>

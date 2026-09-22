@@ -49,6 +49,21 @@ public class ControlPlaneDbContext : DbContext
     /// </summary>
     public DbSet<DemoRequest> DemoRequests => Set<DemoRequest>();
 
+    /// <summary>
+    /// Customers who look after their own stands. Deliberately a different table
+    /// from <see cref="OperatorAccount"/>, with different rules — see
+    /// <see cref="Portal.CustomerAccount"/>.
+    /// </summary>
+    public DbSet<Portal.CustomerAccount> CustomerAccounts => Set<Portal.CustomerAccount>();
+
+    public DbSet<Portal.CustomerSession> CustomerSessions => Set<Portal.CustomerSession>();
+
+    /// <summary>One-shot links: confirm an address, set a new password.</summary>
+    public DbSet<Portal.CustomerToken> CustomerTokens => Set<Portal.CustomerToken>();
+
+    /// <summary>Which customer accounts may see and act on which stands.</summary>
+    public DbSet<Portal.TenantMembership> TenantMemberships => Set<Portal.TenantMembership>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -107,6 +122,50 @@ public class ControlPlaneDbContext : DbContext
             .HasOne(s => s.Account)
             .WithMany()
             .HasForeignKey(s => s.OperatorAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // ------------------------------------------------------------ portal ---
+
+        // Unique and the login key. Addresses are lower-cased on write precisely so
+        // that this index can be the thing that stops one person becoming two
+        // accounts, only one of which owns their stand.
+        modelBuilder.Entity<Portal.CustomerAccount>().HasIndex(a => a.Email).IsUnique();
+
+        modelBuilder.Entity<Portal.CustomerSession>().HasIndex(s => s.TokenHash).IsUnique();
+        modelBuilder.Entity<Portal.CustomerSession>()
+            .HasOne(s => s.Account)
+            .WithMany()
+            .HasForeignKey(s => s.CustomerAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<Portal.CustomerToken>().Property(t => t.Kind).HasConversion<string>();
+        // Looked up by hash on every click of a link in an e-mail.
+        modelBuilder.Entity<Portal.CustomerToken>().HasIndex(t => t.TokenHash).IsUnique();
+        modelBuilder.Entity<Portal.CustomerToken>()
+            .HasOne(t => t.Account)
+            .WithMany()
+            .HasForeignKey(t => t.CustomerAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<Portal.TenantMembership>().Property(m => m.Role).HasConversion<string>();
+        // One grant per person per stand: the role is a column on the row, not a
+        // second row, so a duplicate would mean two different answers to "may
+        // they?" with nothing deciding which wins.
+        modelBuilder.Entity<Portal.TenantMembership>()
+            .HasIndex(m => new { m.CustomerAccountId, m.TenantId }).IsUnique();
+        modelBuilder.Entity<Portal.TenantMembership>()
+            .HasOne(m => m.Account)
+            .WithMany()
+            .HasForeignKey(m => m.CustomerAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
+        // A real foreign key to Tenant WITH cascade — unlike Jobs and Snapshots,
+        // which have none because they are history and must outlive their tenant.
+        // A membership is access, and access to a tenant that no longer exists is
+        // a dangling grant the portal would list and then fail on.
+        modelBuilder.Entity<Portal.TenantMembership>()
+            .HasOne(m => m.Tenant)
+            .WithMany()
+            .HasForeignKey(m => m.TenantId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
