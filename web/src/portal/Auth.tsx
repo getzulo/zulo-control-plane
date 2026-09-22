@@ -26,6 +26,8 @@ export function PortalAuth({ onSignedIn }: { onSignedIn: () => void }) {
   const [notice, setNotice] = useState<string | null>(null);
   /** The server asked for a second factor. Only then is the field shown. */
   const [needsTotp, setNeedsTotp] = useState(false);
+  /** Signed in correctly, but the address was never confirmed. */
+  const [unconfirmed, setUnconfirmed] = useState(false);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -46,6 +48,9 @@ export function PortalAuth({ onSignedIn }: { onSignedIn: () => void }) {
       token.set(result.token);
       onSignedIn();
     } catch (e) {
+      // 403 means the password was right and the address is unconfirmed. The
+      // server no longer mails the link for us, so offer the button instead.
+      if (e instanceof ApiError && e.status === 403) setUnconfirmed(true);
       // A wrong or missing code answers 401 like a wrong password does — on
       // purpose, so the form is not an oracle. Showing the field once a sign-in
       // has failed is the honest compromise: it costs a second attempt and tells
@@ -53,6 +58,12 @@ export function PortalAuth({ onSignedIn }: { onSignedIn: () => void }) {
       if (e instanceof ApiError && e.status === 401 && !needsTotp) setNeedsTotp(true);
       throw e;
     }
+  });
+
+  const resend = () => run(async () => {
+    const result = await portal.resend(email);
+    setNotice(result.message);
+    setUnconfirmed(false);
   });
 
   const register = () => run(async () => {
@@ -87,6 +98,20 @@ export function PortalAuth({ onSignedIn }: { onSignedIn: () => void }) {
 
           {error && <Alert color="red" variant="light">{error}</Alert>}
           {notice && <Alert color="blue" variant="light">{notice}</Alert>}
+
+          {unconfirmed && (
+            <Alert color="yellow" variant="light">
+              <Stack gap={6}>
+                <Text size="sm">
+                  Your password is right, but this address was never confirmed. The link is in the
+                  message we sent when you signed up — any of them will do.
+                </Text>
+                <Button size="xs" variant="light" loading={busy} onClick={() => void resend()}>
+                  Send the link again
+                </Button>
+              </Stack>
+            </Alert>
+          )}
 
           {screen === 'register' && (
             <TextInput

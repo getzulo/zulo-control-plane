@@ -203,7 +203,33 @@ fleet one guid at a time.
 The one deliberate exception: signing in with a correct password to an unverified
 account says so. Only *after* the password is proved — by then the person has
 told us nothing they did not know — and it is the only way they can find out why
-a correct password is not working.
+a correct password is not working. It does **not** send anything; resending is a
+button, on `POST /api/portal/auth/resend`.
+
+---
+
+## Two things driving it live changed
+
+Both found running the thing against a real server and a real SMTP catcher, and
+neither was visible in a unit test.
+
+**Reissuing a verification token used to kill the previous one.** Purging
+outstanding tokens of the same kind looked tidy and broke the ordinary path:
+register → letter arrives → try to sign in before clicking it → the sign-in
+reissues → the link in the mail already open is now dead, and says "expired or
+already used". The probe produced **three identical letters of which only the
+last worked**.
+
+Now only `ResetPassword` purges. Nothing is bought by purging verification
+tokens: every one lands in the same mailbox, so a second live link widens nothing
+that compromising the mailbox does not already own, and each is single-use with
+its own expiry. A reset token is different in kind — a password equivalent — and
+there the shorter window earns its cost.
+
+**A failed sign-in used to mail the link.** Which meant anybody who knew a
+customer's address could fill that person's mailbox by attempting to sign in.
+Sending is now its own endpoint, behind a button, and only for an account that is
+actually unverified.
 
 ---
 

@@ -136,6 +136,13 @@ export const portal = {
 
   forgot: (email: string) => post<{ sent: boolean; message: string }>('/api/portal/auth/forgot', { email }),
 
+  /**
+   * Asks for the confirmation link again. Its own call rather than a side effect
+   * of a failed sign-in: sending from there meant anybody who knew an address
+   * could fill that person's mailbox by attempting to sign in.
+   */
+  resend: (email: string) => post<{ sent: boolean; message: string }>('/api/portal/auth/resend', { email }),
+
   reset: (t: string, password: string) =>
     post<{ reset: boolean }>('/api/portal/auth/reset', { token: t, password }),
 

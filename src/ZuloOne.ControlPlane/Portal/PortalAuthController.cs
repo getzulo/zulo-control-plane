@@ -180,11 +180,14 @@ public class PortalAuthController : ControllerBase
         // can find out why a correct password is not working.
         if (account.EmailVerifiedAt is null)
         {
-            var fresh = await IssueAsync(account, CustomerTokenKind.VerifyEmail, ct);
-            await _mailer.SendVerificationAsync(account.Email, account.DisplayName, fresh, ct);
+            // Reports, and does NOT send. Sending from here made every failed
+            // sign-in mail the address — so anybody who knows a customer's address
+            // could fill their mailbox by attempting to sign in, and a person
+            // trying twice got three identical letters. Resending is a deliberate
+            // act now, on its own endpoint, behind a button.
             return StatusCode(StatusCodes.Status403Forbidden, new
             {
-                error = "This address has not been confirmed yet. We have sent the link again.",
+                error = "This address has not been confirmed yet. Check your mailbox for the link.",
                 unverified = true,
             });
         }
@@ -224,6 +227,32 @@ public class PortalAuthController : ControllerBase
         await _claims.ClaimAsync(account, ct);
 
         return Ok(new { token, expiresAt = expires, email = account.Email, displayName = account.DisplayName });
+    }
+
+    [AllowAnonymous]
+    [EnableRateLimiting(PortalRateLimit.Policy)]
+    [HttpPost("resend")]
+    public async Task<IActionResult> Resend([FromBody] PortalForgotRequest request, CancellationToken ct)
+    {
+        if (!_settings.Enabled) return NotFound();
+
+        var email = Normalise(request.Email);
+        if (email is not null)
+        {
+            var account = await _db.CustomerAccounts.FirstOrDefaultAsync(a => a.Email == email, ct);
+
+            // Only for an UNVERIFIED account. A verified one has nothing to confirm,
+            // and mailing it a verification link on request would be a way to send
+            // our letters to a stranger's mailbox on demand.
+            if (account is { EmailVerifiedAt: null })
+            {
+                var token = await IssueAsync(account, CustomerTokenKind.VerifyEmail, ct);
+                await _mailer.SendVerificationAsync(account.Email, account.DisplayName, token, ct);
+            }
+        }
+
+        // Identical whatever happened, like register and forgot.
+        return Ok(new { sent = true, message = "If that address is waiting to be confirmed, the link is on its way." });
     }
 
     [AllowAnonymous]
@@ -392,12 +421,27 @@ public class PortalAuthController : ControllerBase
     /// <summary>Mints a one-shot token, stores its hash and returns the secret.</summary>
     private async Task<string> IssueAsync(CustomerAccount account, CustomerTokenKind kind, CancellationToken ct)
     {
-        // Outstanding tokens of the same kind are dropped. Two live verification
-        // links for one address means the older mail still works after the newer
-        // one was sent, which is a longer window than anybody intended.
-        await _db.CustomerTokens
-            .Where(t => t.CustomerAccountId == account.Id && t.Kind == kind && t.ConsumedAt == null)
-            .ExecuteDeleteAsync(ct);
+        // Outstanding RESET tokens are dropped; verification tokens are NOT.
+        //
+        // The asymmetry is the fix for a defect caught driving this against a real
+        // server. Purging both looked tidier and broke the ordinary path: somebody
+        // registers, gets the letter, tries to sign in before clicking it, and the
+        // sign-in reissues — killing the link in the mail they already have open.
+        // They click it and are told it has "expired or already been used", which
+        // is true and completely baffling. The probe produced THREE identical
+        // "Confirm your address" letters of which only the last worked.
+        //
+        // Nothing is bought by purging them. Every verification link for an address
+        // lands in that one mailbox, so a second live link widens nothing a
+        // compromise of the mailbox does not already own; each is single-use and
+        // expires on its own. A reset token is different in kind — it is a password
+        // equivalent, and there the shorter window is worth the cost.
+        if (kind == CustomerTokenKind.ResetPassword)
+        {
+            await _db.CustomerTokens
+                .Where(t => t.CustomerAccountId == account.Id && t.Kind == kind && t.ConsumedAt == null)
+                .ExecuteDeleteAsync(ct);
+        }
 
         var (token, hash) = PortalTokens.Mint();
         _db.CustomerTokens.Add(new CustomerToken
