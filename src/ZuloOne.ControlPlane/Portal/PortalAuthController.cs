@@ -122,7 +122,7 @@ public class PortalAuthController : ControllerBase
             _db.CustomerAccounts.Add(account);
             await _db.SaveChangesAsync(ct);
             var fresh = await IssueAsync(account, CustomerTokenKind.VerifyEmail, ct);
-            await _mailer.SendVerificationAsync(account.Email, account.DisplayName, fresh, ct);
+            await _mailer.SendVerificationAsync(account.Email, account.DisplayName, account.Locale, fresh, ct);
             _logger.LogInformation("Portal registration for {Email}", email);
         }
         else if (existing.EmailVerifiedAt is null)
@@ -136,7 +136,7 @@ public class PortalAuthController : ControllerBase
             existing.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
             var again = await IssueAsync(existing, CustomerTokenKind.VerifyEmail, ct);
-            await _mailer.SendVerificationAsync(existing.Email, existing.DisplayName, again, ct);
+            await _mailer.SendVerificationAsync(existing.Email, existing.DisplayName, existing.Locale, again, ct);
         }
         else
         {
@@ -144,7 +144,7 @@ public class PortalAuthController : ControllerBase
             // this request could be from anyone. Send the letter that helps the
             // real owner and tells an impostor nothing.
             var token = await IssueAsync(existing, CustomerTokenKind.ResetPassword, ct);
-            await _mailer.SendPasswordResetAsync(existing.Email, token, ct);
+            await _mailer.SendPasswordResetAsync(existing.Email, existing.Locale, token, ct);
             _logger.LogInformation("Portal registration for an existing address {Email} — sent a reset instead", email);
         }
 
@@ -269,7 +269,7 @@ public class PortalAuthController : ControllerBase
             if (account is { EmailVerifiedAt: null })
             {
                 var token = await IssueAsync(account, CustomerTokenKind.VerifyEmail, ct);
-                await _mailer.SendVerificationAsync(account.Email, account.DisplayName, token, ct);
+                await _mailer.SendVerificationAsync(account.Email, account.DisplayName, account.Locale, token, ct);
             }
         }
 
@@ -291,7 +291,7 @@ public class PortalAuthController : ControllerBase
             if (account is not null)
             {
                 var token = await IssueAsync(account, CustomerTokenKind.ResetPassword, ct);
-                await _mailer.SendPasswordResetAsync(account.Email, token, ct);
+                await _mailer.SendPasswordResetAsync(account.Email, account.Locale, token, ct);
             }
         }
 

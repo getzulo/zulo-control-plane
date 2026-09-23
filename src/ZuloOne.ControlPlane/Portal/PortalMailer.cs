@@ -31,9 +31,9 @@ public sealed class PortalMailer
         _logger = logger;
     }
 
-    public Task SendVerificationAsync(string email, string? displayName, string token, CancellationToken ct = default)
+    public Task SendVerificationAsync(string email, string? displayName, string? locale, string token, CancellationToken ct = default)
     {
-        var link = Link("/portal/verify", token);
+        var link = Link(_portal.VerifyPath, locale, token);
         return SendAsync(email,
             "Confirm your address",
             $"""
@@ -45,9 +45,9 @@ public sealed class PortalMailer
              """, ct);
     }
 
-    public Task SendPasswordResetAsync(string email, string token, CancellationToken ct = default)
+    public Task SendPasswordResetAsync(string email, string? locale, string token, CancellationToken ct = default)
     {
-        var link = Link("/portal/reset", token);
+        var link = Link(_portal.ResetPath, locale, token);
         return SendAsync(email,
             "Set a new password",
             $"""
@@ -67,10 +67,23 @@ public sealed class PortalMailer
     /// person who owns the address hands over their own token. Configuration is
     /// the only source here that an attacker cannot set.
     /// </remarks>
-    private string Link(string path, string token)
+    private string Link(string path, string? locale, string token)
     {
         var root = (_portal.PublicUrl ?? string.Empty).TrimEnd('/');
-        return $"{root}{path}?token={Uri.EscapeDataString(token)}";
+
+        // The locale reaches this string from the account row, which the person
+        // signing up filled in. It is therefore checked against an allow-list
+        // rather than escaped: escaping would keep the link on our host but
+        // still let a stranger choose the path it lands on, and this link
+        // carries a live token.
+        var lang = locale ?? string.Empty;
+        if (!_portal.Locales.Contains(lang, StringComparer.OrdinalIgnoreCase))
+        {
+            lang = _portal.DefaultLocale;
+        }
+
+        var resolved = path.Replace("{locale}", lang, StringComparison.OrdinalIgnoreCase);
+        return $"{root}{resolved}?token={Uri.EscapeDataString(token)}";
     }
 
     private async Task SendAsync(string to, string subject, string html, CancellationToken ct)

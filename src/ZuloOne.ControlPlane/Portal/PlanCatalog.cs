@@ -199,6 +199,29 @@ public static class PlanCatalog
         if (capability is PortalCapability.ViewTenant or PortalCapability.ViewStats or PortalCapability.ViewLogs)
             return PortalDecision.Yes;
 
+        // Suspended means two different things, and conflating them stranded the
+        // customer.
+        //
+        // An operator sets it when a subscription is not settled — that is the
+        // licence gate below. But `Stop` sets it too, at the customer's own
+        // request, and records `StoppedByCustomer`. Without this branch the
+        // capability map answered "read-only, settle your subscription" to
+        // somebody who had pressed Stop a minute earlier: the Start button never
+        // appeared and the stand could not be brought back from the portal at
+        // all — while `Start` itself was written for exactly this case and even
+        // gives an operator-suspension its own distinct 403.
+        //
+        // Only starting is restored. The rest stays read-only, because the stand
+        // really is down and a restart or a password reset against it would fail.
+        if (tenant.Status == TenantStatus.Suspended
+            && tenant.StoppedByCustomer
+            && capability is PortalCapability.StopStartTenant)
+        {
+            return role == MembershipRole.Owner
+                ? PortalDecision.Yes
+                : PortalDecision.No("Only the stand's owner can do this.");
+        }
+
         // The licence gate. Suspended is what an operator sets when a subscription
         // is not settled, so this is the one place the portal enforces payment —
         // off state that already exists rather than a billing flag of its own.

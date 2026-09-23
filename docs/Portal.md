@@ -43,8 +43,18 @@ compile-time consequence when it is wrong.
 
 ## Turning it on
 
-**`Portal:Enabled` is false by default, and switching it to true is a decision
-about the edge, not just about this file.**
+**`Portal:Enabled` is false by default.**
+
+> **Changed 2026-09-23.** The Cloudflare Access bypass below is NO LONGER
+> required when the customer cabinet on `getzulo.com` is the front end. The
+> cabinet talks to `/api/portal/**` from inside the network, so nothing at the
+> edge routes a customer here and the panel's hostname stays closed to everyone
+> but staff. The bypass is still needed if you serve the built-in SPA at
+> `/portal` directly — see `Portal:VerifyPath` below for the other half of that
+> choice.
+
+When the built-in SPA IS the front end, switching this on is a decision about
+the edge, not just about this file.
 
 This application sits behind Cloudflare Access. Customers are not staff, so
 Access blocks them before the request ever reaches here. Before enabling:
@@ -78,6 +88,10 @@ own token.
 | `Portal:LockoutThreshold` | 8 | Per account, checked before the password is verified. |
 | `Portal:LockoutMinutes` | 15 | |
 | `Portal:ClaimByAdminEmail` | `true` | See *How somebody gets a stand*. Turn **off** where stands are provisioned against a shared internal address. |
+| `Portal:VerifyPath` | `/portal/verify` | Path the verification link points at, appended to `PublicUrl`. `{locale}` is replaced with the account's language. For the getzulo.com cabinet: `/{locale}/cabinet/verify`. Hardcoded until 2026-09-23, which made every mailed link point at a 404 the moment the front end moved. |
+| `Portal:ResetPath` | `/portal/reset` | Same, for password reset. |
+| `Portal:Locales` | `en, ru, ar, uk` | Allow-list for `{locale}`. `CustomerAccount.Locale` is supplied at registration, so this is a guard, not a formality: without it a sign-up carrying `../../somewhere` mails itself a link that leaves the cabinet — from our domain, with a live token. |
+| `Portal:DefaultLocale` | `en` | Used when the account has no language, and as the fallback for anything not on the list. |
 
 ---
 

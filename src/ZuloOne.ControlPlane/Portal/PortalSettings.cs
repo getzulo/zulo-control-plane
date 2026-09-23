@@ -67,4 +67,46 @@ public sealed class PortalSettings
     /// whole fleet, and there the grant must be manual.
     /// </remarks>
     public bool ClaimByAdminEmail { get; set; } = true;
+
+    /// <summary>
+    /// Path of the page that finishes verification, appended to
+    /// <see cref="PublicUrl"/>. <c>{locale}</c> is replaced with the account's
+    /// language.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Configurable because the page that handles the link is NOT always this
+    /// application. When the customer cabinet moved to getzulo.com the link had
+    /// to become <c>/{locale}/cabinet/verify</c>; with the path hardcoded, every
+    /// verification mail pointed at a 404 — and the only symptom would be
+    /// customers who can register and never sign in.
+    /// </para>
+    /// <para>
+    /// The default keeps the behaviour of the built-in SPA at <c>/portal</c>, so
+    /// a deployment that does not use the cabinet changes nothing.
+    /// </para>
+    /// </remarks>
+    public string VerifyPath { get; set; } = "/portal/verify";
+
+    /// <summary>Path of the password-reset page. See <see cref="VerifyPath"/>.</summary>
+    public string ResetPath { get; set; } = "/portal/reset";
+
+    /// <summary>
+    /// Language used in a link when the account has none recorded, and the
+    /// fallback for anything not in <see cref="Locales"/>.
+    /// </summary>
+    public string DefaultLocale { get; set; } = "en";
+
+    /// <summary>
+    /// Languages that may appear in a mailed link.
+    /// </summary>
+    /// <remarks>
+    /// An allow-list, not a format check. <c>CustomerAccount.Locale</c> is
+    /// supplied at registration and is therefore attacker-influenced: without
+    /// this, a sign-up carrying <c>../../somewhere</c> would mail ITSELF a link
+    /// that leaves the cabinet — from our domain, in our template, with a valid
+    /// token attached. Anything not listed falls back to
+    /// <see cref="DefaultLocale"/>.
+    /// </remarks>
+    public string[] Locales { get; set; } = ["en", "ru", "ar", "uk"];
 }
