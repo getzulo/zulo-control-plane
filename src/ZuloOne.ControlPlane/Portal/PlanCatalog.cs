@@ -25,6 +25,18 @@ public enum PortalCapability
 
     /// <summary>Let another person in, or put them out.</summary>
     ManageMembers,
+
+    /// <summary>
+    /// Move the stand to the newest release.
+    /// </summary>
+    /// <remarks>
+    /// Only offered where the subscription includes the development module. A
+    /// stand without it runs stock code and is carried by the fleet rollout, so
+    /// a button here would duplicate something that already happened; a stand
+    /// with it carries custom C# that an upgrade can stop compiling, so the
+    /// decision — and the timing — belong to the customer.
+    /// </remarks>
+    UpgradeTenant,
 }
 
 /// <summary>
@@ -71,7 +83,20 @@ public sealed record PlanFacts(
     int? RestoreDays,
     string? SupportResponse,
     string? Availability,
-    bool SandboxIncluded);
+    bool SandboxIncluded,
+    /// <summary>
+    /// Whether the subscription includes the development module — the right to
+    /// write and run custom models on the stand.
+    /// </summary>
+    /// <remarks>
+    /// It decides who owns the upgrade. A stand WITHOUT it runs stock code, so a
+    /// new platform release cannot break anything the customer wrote and the
+    /// fleet rollout takes it along silently. A stand WITH it carries custom C#
+    /// that the platform compiles, and an upgrade can stop that code compiling —
+    /// so the move becomes the customer's decision, made when they are ready to
+    /// test it, and the cabinet shows them a button instead of a surprise.
+    /// </remarks>
+    bool DevelopmentIncluded);
 
 /// <summary>
 /// What each plan includes, and who may do what to a stand.
@@ -122,7 +147,9 @@ public static class PlanCatalog
             RestoreDays: 14,
             SupportResponse: "next working day",
             Availability: null,
-            SandboxIncluded: false),
+            SandboxIncluded: false,
+            // Turnkey plan: stock models only, so upgrades are ours to make.
+            DevelopmentIncluded: false),
 
         [Business] = new(
             Code: Business,
@@ -133,7 +160,9 @@ public static class PlanCatalog
             RestoreDays: 90,
             SupportResponse: "four-hour first response",
             Availability: "99.5%",
-            SandboxIncluded: true),
+            SandboxIncluded: true,
+            // A sandbox with no right to write code in it would be furniture.
+            DevelopmentIncluded: true),
 
         [Enterprise] = new(
             Code: Enterprise,
@@ -146,7 +175,8 @@ public static class PlanCatalog
             RestoreDays: null,
             SupportResponse: "named engineer",
             Availability: "99.9%",
-            SandboxIncluded: true),
+            SandboxIncluded: true,
+            DevelopmentIncluded: true),
     };
 
     /// <summary>
@@ -175,7 +205,12 @@ public static class PlanCatalog
             RestoreDays: null,
             SupportResponse: null,
             Availability: null,
-            SandboxIncluded: false);
+            SandboxIncluded: false,
+            // An unrecognised plan gets the SAFE answer, not the convenient one:
+            // no development means the fleet may upgrade it unasked. A stand
+            // whose plan nobody recognises is exactly the one not to move
+            // silently, so this is false and the upgrade stays manual.
+            DevelopmentIncluded: false);
     }
 
     /// <summary>Every published plan, for a chooser or a comparison table.</summary>
@@ -198,6 +233,17 @@ public static class PlanCatalog
         // that would explain why they are locked out.
         if (capability is PortalCapability.ViewTenant or PortalCapability.ViewStats or PortalCapability.ViewLogs)
             return PortalDecision.Yes;
+
+        // The upgrade button exists only where the customer owns the decision.
+        // Checked before the state gates below so the sentence a Start customer
+        // reads is about their plan, which is the real reason, rather than about
+        // the stand being busy.
+        if (capability is PortalCapability.UpgradeTenant
+            && !Describe(tenant.Plan).DevelopmentIncluded)
+        {
+            return PortalDecision.No(
+                "Stands on this plan are updated for you — there is nothing to do here.");
+        }
 
         // Suspended means two different things, and conflating them stranded the
         // customer.

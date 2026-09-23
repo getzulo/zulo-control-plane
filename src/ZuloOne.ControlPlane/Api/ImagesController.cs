@@ -760,27 +760,12 @@ public class ImagesController : ControllerBase
     /// <remarks>internal so the models catalogue splits an image the same way — one
     /// definition, because two would drift the first time a registry host changed
     /// shape.</remarks>
+    // Moved to Registry/ReleaseVersion.cs — the customer portal needs the same
+    // split, and a second copy would have drifted.
     internal static (string? Registry, string Repository) SplitImage(string image)
-    {
-        var withoutTag = image.Contains(':') && image.LastIndexOf(':') > image.LastIndexOf('/')
-            ? image[..image.LastIndexOf(':')]
-            : image;
-        var slash = withoutTag.IndexOf('/');
-        // A registry host is recognisable by carrying a port or a dot; without one
-        // this is a Docker Hub name and there is no local registry to query.
-        if (slash < 0) return (null, withoutTag);
-        var head = withoutTag[..slash];
-        return head.Contains(':') || head.Contains('.') ? (head, withoutTag[(slash + 1)..]) : (null, withoutTag);
-    }
+        => ReleaseVersion.SplitImage(image);
 
-    private static bool IsRelease(string tag)
-    {
-        var parts = tag.Split('.');
-        return parts.Length == 3
-            && int.TryParse(parts[0], out var year) && year > 2000
-            && int.TryParse(parts[1], out var month) && month is >= 1 and <= 12
-            && int.TryParse(parts[2], out _);
-    }
+    private static bool IsRelease(string tag) => ReleaseVersion.IsRelease(tag);
 
     /// <summary>
     /// A <c>sha-&lt;commit&gt;</c> tag whose manifest already carries a readable name.
@@ -823,14 +808,7 @@ public class ImagesController : ControllerBase
     /// 2026.9.4, which is exactly backwards at the moment someone is choosing what
     /// to upgrade to.
     /// </summary>
-    private static readonly IComparer<string> CalVer = Comparer<string>.Create((a, b) =>
-    {
-        var x = a.Split('.'); var y = b.Split('.');
-        for (var i = 0; i < 3; i++)
-        {
-            var c = int.Parse(x[i]).CompareTo(int.Parse(y[i]));
-            if (c != 0) return c;
-        }
-        return 0;
-    });
+    // Moved to Registry/ReleaseVersion.cs when the customer portal needed the
+    // same definitions; two copies would have drifted.
+    private static readonly IComparer<string> CalVer = ReleaseVersion.CalVer;
 }

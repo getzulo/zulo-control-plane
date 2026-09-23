@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Auth;
 using ZuloOne.ControlPlane.Registry;
@@ -37,6 +38,8 @@ public record PortalInviteRequest(string Email, string? Role);
 public class PortalController : ControllerBase
 {
     private readonly ControlPlaneDbContext _db;
+    private readonly IJobQueue _queue;
+    private readonly FleetConfig _fleet;
     private readonly TenantContainerService _containers;
     private readonly PortalSettings _settings;
     private readonly ILogger<PortalController> _logger;
@@ -45,12 +48,37 @@ public class PortalController : ControllerBase
         ControlPlaneDbContext db,
         TenantContainerService containers,
         IOptions<PortalSettings> settings,
+        IJobQueue queue,
+        FleetConfig fleet,
         ILogger<PortalController> logger)
     {
         _db = db;
         _containers = containers;
         _settings = settings.Value;
+        _queue = queue;
+        _fleet = fleet;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// The newest promoted release for the fleet's repository, or null.
+    /// </summary>
+    /// <remarks>
+    /// Releases only — never a CI build. A customer offered `sha-1a2b3c` as
+    /// "the latest version" would be offered something nobody promoted, and
+    /// `ReleaseVersion` is the one place that decides what a release is.
+    /// </remarks>
+    private async Task<string?> LatestReleaseAsync(CancellationToken ct)
+    {
+        var (_, repository) = ReleaseVersion.SplitImage(_fleet.DefaultImage);
+        var rows = await _db.Releases.AsNoTracking()
+            .Where(r => r.Repository == repository)
+            .Select(r => r.Version)
+            .ToListAsync(ct);
+        return rows
+            .Where(ReleaseVersion.IsRelease)
+            .OrderByDescending(v => v, ReleaseVersion.CalVer)
+            .FirstOrDefault();
     }
 
     /// <summary>Every stand this account may see.</summary>
@@ -69,12 +97,13 @@ public class PortalController : ControllerBase
             .ToListAsync(ct);
 
         var now = DateTime.UtcNow;
+        var latest = await LatestReleaseAsync(ct);
         return Ok(new
         {
             tenants = rows
                 .Where(m => m.Tenant is not null)
                 .OrderBy(m => m.Tenant!.Slug)
-                .Select(m => Card(m.Tenant!, m.Role, now))
+                .Select(m => Card(m.Tenant!, m.Role, now, latest))
                 .ToList(),
         });
     }
@@ -109,6 +138,58 @@ public class PortalController : ControllerBase
         if (found.Failure is { } failure) return failure;
 
         return Ok(await stats.ReadAsync(found.Tenant!, ct));
+    }
+
+    /// <summary>
+    /// Move the stand to the newest release.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only reachable where the plan includes the development module; everywhere
+    /// else <see cref="PlanCatalog.Decide"/> refuses with the sentence that says
+    /// so, because those stands are carried by the fleet rollout and a button
+    /// would promise a choice nobody has.
+    /// </para>
+    /// <para>
+    /// The work itself is the operator's existing <see cref="JobKind.Upgrade"/>
+    /// — snapshot, recreate, health gate, roll back on failure. The customer
+    /// does not get a lighter path than staff: an upgrade that skipped the
+    /// snapshot would be a one-way door on somebody's production data.
+    /// </para>
+    /// <para>
+    /// The target is chosen HERE, not sent by the caller. Accepting a tag from
+    /// the browser would let anyone with a session move a stand onto any image
+    /// in the registry, including an old one — a downgrade past a forward-only
+    /// migration, which is unrecoverable.
+    /// </para>
+    /// </remarks>
+    [HttpPost("{id:guid}/upgrade")]
+    public async Task<IActionResult> Upgrade(Guid id, CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct, PortalCapability.UpgradeTenant);
+        if (found.Failure is { } failure) return failure;
+
+        var tenant = found.Tenant!;
+        var latest = await LatestReleaseAsync(ct);
+
+        if (latest is null)
+            return BadRequest(new { error = "There is no published release to move to." });
+        if (!ReleaseVersion.IsNewer(latest, tenant.ImageTag))
+            return BadRequest(new { error = $"This stand is already on {tenant.ImageTag}." });
+        if (string.IsNullOrWhiteSpace(tenant.DatabasePassword))
+            // No password means no snapshot, and no snapshot means no way back.
+            // The operator's endpoint refuses on the same ground.
+            return Conflict(new { error = "This stand cannot be snapshotted, so it cannot be upgraded from here. Contact support." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.Upgrade, tenant.Id, tenant.Slug, new UpgradePayload(latest),
+            $"portal:{Email()}", ct);
+
+        _logger.LogInformation(
+            "Portal account {Actor} moved tenant {Slug} from {From} to {To}",
+            Email(), tenant.Slug, tenant.ImageTag, latest);
+
+        return Accepted(new { jobId = job.Id, version = latest });
     }
 
     /// <summary>Who has an account inside the stand, so one can be picked for a reset.</summary>
@@ -465,7 +546,7 @@ public class PortalController : ControllerBase
     /// id, no last error. Those are the operator's <c>Summary</c>, and several of
     /// them are credentials.
     /// </summary>
-    private TenantCard Card(Tenant tenant, MembershipRole role, DateTime now)
+    private TenantCard Card(Tenant tenant, MembershipRole role, DateTime now, string? latest = null)
     {
         var facts = PlanCatalog.Describe(tenant.Plan);
         return new TenantCard(
@@ -479,6 +560,13 @@ public class PortalController : ControllerBase
             role: role.ToString(),
             demo: tenant.Demo is not null,
             expiresAt: tenant.ExpiresAt,
+            // The version the stand actually runs, and the newest one there is.
+            // Both are shown even where the customer cannot act on them: "you
+            // are on 2026.9.4, the current release is 2026.9.7" is the single
+            // most common support question, and answering it costs nothing.
+            version: tenant.ImageTag,
+            latestVersion: latest,
+            updateAvailable: ReleaseVersion.IsNewer(latest, tenant.ImageTag),
             // Computed here rather than in the UI. A screen that decides for
             // itself which buttons to draw will disagree with the server the first
             // time a rule changes, and the disagreement shows up as a button that
@@ -491,5 +579,7 @@ public class PortalController : ControllerBase
 
     private sealed record TenantCard(
         Guid id, string slug, string displayName, string status, string health, string url,
-        PlanFacts plan, string role, bool demo, DateTime? expiresAt, Dictionary<string, bool> can);
+        PlanFacts plan, string role, bool demo, DateTime? expiresAt,
+        string? version, string? latestVersion, bool updateAvailable,
+        Dictionary<string, bool> can);
 }
