@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -58,16 +59,37 @@ public class PortalAuthController : ControllerBase
     /// Whether the portal is on, and who this request is. Anonymous: the UI calls
     /// it before it renders anything, exactly as the operator dashboard does.
     /// </summary>
+    /// <remarks>
+    /// The scheme is authenticated BY HAND here, and it has to be.
+    /// <para>
+    /// <see cref="AuthSetup"/> calls <c>AddAuthentication()</c> with no default
+    /// scheme on purpose, so that "authenticated" never quietly diverges from
+    /// "allowed here". The consequence for an <see cref="AllowAnonymousAttribute"/>
+    /// endpoint is that nothing populates <c>User</c>: no policy runs, no handler
+    /// is invoked, and <c>User.Identity.IsAuthenticated</c> is false even when the
+    /// caller presented a perfectly good portal token.
+    /// </para>
+    /// <para>
+    /// Measured 2026-09-23 before this fix: sign in, then GET this endpoint with
+    /// the bearer it just issued — <c>{"authenticated":false}</c>, while
+    /// <c>/api/portal/tenants</c> answered 200 for the same token. The portal SPA
+    /// calls this on load and does <c>setSignedIn(ctx.authenticated)</c>, so every
+    /// page refresh threw the customer back to the sign-in form.
+    /// </para>
+    /// </remarks>
     [AllowAnonymous]
     [HttpGet("context")]
-    public IActionResult Context()
+    public async Task<IActionResult> Context()
     {
         if (!_settings.Enabled) return NotFound();
 
+        var result = await HttpContext.AuthenticateAsync(PortalSessionHandler.SchemeName);
+        var user = result.Succeeded ? result.Principal : null;
+
         return Ok(new
         {
-            authenticated = User.Identity?.IsAuthenticated == true,
-            email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value,
+            authenticated = user?.Identity?.IsAuthenticated == true,
+            email = user?.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value,
             // So the sign-up form can say what a password has to be before the
             // person types one, rather than after.
             minPasswordLength = MinPasswordLength,
