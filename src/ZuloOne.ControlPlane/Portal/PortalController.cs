@@ -323,6 +323,122 @@ public class PortalController : ControllerBase
         return Ok(new { logs = await _containers.TailLogsAsync(tenant.ContainerId!, take, ct) });
     }
 
+
+    /// <summary>The business-layer models installed into this stand.</summary>
+    [HttpGet("{id:guid}/models")]
+    public async Task<IActionResult> Models(
+        Guid id,
+        [FromServices] TenantModelsService models,
+        [FromServices] RegistryModelCatalog catalogue,
+        [FromServices] ImageTreeReader trees,
+        CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct);
+        if (found.Failure is { } failure) return failure;
+        var tenant = found.Tenant!;
+
+        var (installed, error) = await models.ReadAsync(tenant, ct);
+        var source = await SourceImageAsync(catalogue, ct);
+        var offered = await OfferedModelsAsync(source, trees, ct);
+        var installedByName = installed.ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            error,
+            imageTag = tenant.ImageTag,
+            sourceImage = source?.Image,
+            models = installed.Select(m =>
+            {
+                offered.TryGetValue(m.Name, out var newest);
+                return new
+                {
+                    m.Name,
+                    m.Version,
+                    m.Publisher,
+                    m.IsSystem,
+                    m.IsEnabled,
+                    m.CompilationStatus,
+                    m.CompilationError,
+                    compiles = ModelGraph.CompilesOk(m.CompilationStatus),
+                    latest = newest,
+                    behind = !m.IsSystem && ModelGraph.IsOutdated(m.Version, newest),
+                };
+            }).ToList(),
+            notInstalled = offered
+                .Where(kv => !installedByName.ContainsKey(kv.Key))
+                .Select(kv => new { name = kv.Key, version = kv.Value })
+                .ToList(),
+        });
+    }
+
+    /// <summary>Install newer revisions of the non-system models already present on this stand.</summary>
+    [HttpPost("{id:guid}/update-models")]
+    public async Task<IActionResult> UpdateModels(
+        Guid id,
+        [FromServices] TenantModelsService models,
+        [FromServices] RegistryModelCatalog catalogue,
+        [FromServices] ImageTreeReader trees,
+        CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct, PortalCapability.UpgradeTenant);
+        if (found.Failure is { } failure) return failure;
+        var tenant = found.Tenant!;
+
+        if (string.IsNullOrWhiteSpace(tenant.DatabasePassword))
+            return Conflict(new { error = "This stand cannot be snapshotted, so its models cannot be updated from here. Contact support." });
+
+        var source = await SourceImageAsync(catalogue, ct);
+        if (source is null)
+            return BadRequest(new { error = "There is no distribution image with models to install from." });
+
+        var offered = await OfferedModelsAsync(source, trees, ct);
+        var (installed, error) = await models.ReadAsync(tenant, ct);
+        if (error is not null)
+            return UnprocessableEntity(new { error });
+
+        var wanted = installed
+            .Where(m => !m.IsSystem)
+            .Where(m => offered.TryGetValue(m.Name, out var newest) && ModelGraph.IsOutdated(m.Version, newest))
+            .Select(m => m.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (wanted.Length == 0)
+            return BadRequest(new { error = "The installed models are already current." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.InstallModels, tenant.Id, tenant.Slug,
+            new InstallModelsPayload(source.Image, wanted),
+            $"portal:{Email()}", ct);
+
+        _logger.LogInformation(
+            "Portal account {Actor} queued model update for tenant {Slug}: {Models}",
+            Email(), tenant.Slug, string.Join(", ", wanted));
+
+        return Accepted(new { jobId = job.Id, sourceImage = source.Image, models = wanted });
+    }
+
+    /// <summary>Recompile the business-layer models already installed in this stand.</summary>
+    [HttpPost("{id:guid}/compile-models")]
+    public async Task<IActionResult> CompileModels(Guid id, CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct, PortalCapability.UpgradeTenant);
+        if (found.Failure is { } failure) return failure;
+        var tenant = found.Tenant!;
+
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+            return Conflict(new { error = "This stand has no signing key, so its models cannot be compiled from here. Contact support." });
+
+        var job = await _queue.EnqueueAsync(
+            JobKind.CompileModels, tenant.Id, tenant.Slug, payload: null,
+            $"portal:{Email()}", ct);
+
+        _logger.LogInformation(
+            "Portal account {Actor} queued model compile for tenant {Slug}", Email(), tenant.Slug);
+
+        return Accepted(new { jobId = job.Id });
+    }
     // -------------------------------------------------------------- members ---
 
     [HttpGet("{id:guid}/members")]
@@ -534,6 +650,40 @@ public class PortalController : ControllerBase
     private IActionResult Forbid403(string reason) =>
         StatusCode(StatusCodes.Status403Forbidden, new { error = reason });
 
+
+    private async Task<CatalogueImage?> SourceImageAsync(RegistryModelCatalog catalogue, CancellationToken ct)
+    {
+        var (registry, _) = ZuloOne.ControlPlane.Api.ImagesController.SplitImage(_fleet.DefaultImage);
+        if (registry is null) return null;
+
+        var images = await catalogue.ReadAsync(registry, ct);
+        var source = ZuloOne.ControlPlane.Api.ModelsController.PickDistribution(images);
+        return source is null
+            ? null
+            : images.FirstOrDefault(i => string.Equals(i.Image, source, StringComparison.Ordinal));
+    }
+
+    private static async Task<Dictionary<string, string>> OfferedModelsAsync(
+        CatalogueImage? source,
+        ImageTreeReader trees,
+        CancellationToken ct)
+    {
+        if (source is null) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var graph = (await trees.ReadGraphAsync(source.Image, ct))
+            .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+
+        return source.Models
+            .Where(m => !StandModel.IsShippedName(m.Name) && !TestFixtureModel.IsName(m.Name))
+            .Where(m => !graph.TryGetValue(m.Name, out var node) || !node.IsSystem)
+            .GroupBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(m => m.Version)
+                    .OrderByDescending(v => v, Comparer<string>.Create(ModelGraph.CompareVersions))
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+    }
     private Guid? AccountId() =>
         Guid.TryParse(User.FindFirst(PortalSessionHandler.AccountIdClaim)?.Value, out var id) ? id : null;
 
