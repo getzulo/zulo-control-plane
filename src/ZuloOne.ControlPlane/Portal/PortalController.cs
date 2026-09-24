@@ -11,6 +11,7 @@ namespace ZuloOne.ControlPlane.Portal;
 
 public record PortalResetUserRequest(string? UserName);
 public record PortalInviteRequest(string Email, string? Role);
+public record PortalUpdateModelsRequest(string[]? Models);
 
 /// <summary>
 /// What a customer can do to their own stands.
@@ -339,7 +340,8 @@ public class PortalController : ControllerBase
 
         var (installed, error) = await models.ReadAsync(tenant, ct);
         var source = await SourceImageAsync(catalogue, ct);
-        var offered = await OfferedModelsAsync(source, trees, ct);
+        var graph = await ModelGraphAsync(source, trees, ct);
+        var offered = OfferedModels(source, graph);
         var installedByName = installed.ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
 
         return Ok(new
@@ -362,6 +364,7 @@ public class PortalController : ControllerBase
                     compiles = ModelGraph.CompilesOk(m.CompilationStatus),
                     latest = newest,
                     behind = !m.IsSystem && ModelGraph.IsOutdated(m.Version, newest),
+                    updateGroup = UpdateGroup(m.Name, installedByName, offered, graph),
                 };
             }).ToList(),
             notInstalled = offered
@@ -391,15 +394,33 @@ public class PortalController : ControllerBase
         if (source is null)
             return BadRequest(new { error = "There is no distribution image with models to install from." });
 
-        var offered = await OfferedModelsAsync(source, trees, ct);
+        var graph = await ModelGraphAsync(source, trees, ct);
+        var offered = OfferedModels(source, graph);
         var (installed, error) = await models.ReadAsync(tenant, ct);
         if (error is not null)
             return UnprocessableEntity(new { error });
 
-        var wanted = installed
-            .Where(m => !m.IsSystem)
-            .Where(m => offered.TryGetValue(m.Name, out var newest) && ModelGraph.IsOutdated(m.Version, newest))
-            .Select(m => m.Name)
+        var request = await ReadUpdateModelsRequestAsync(ct);
+        var installedByName = installed.ToDictionary(m => m.Name, StringComparer.OrdinalIgnoreCase);
+        var selected = request?.Models?
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var seeds = selected is { Length: > 0 }
+            ? selected
+            : installed
+                .Where(m => !m.IsSystem)
+                .Where(m => offered.TryGetValue(m.Name, out var newest) && ModelGraph.IsOutdated(m.Version, newest))
+                .Select(m => m.Name)
+                .ToArray();
+
+        var wanted = ModelGraph.Expand(seeds, graph)
+            .Where(name => installedByName.TryGetValue(name, out var row)
+                           && !row.IsSystem
+                           && offered.TryGetValue(name, out var newest)
+                           && ModelGraph.IsOutdated(row.Version, newest))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -651,6 +672,21 @@ public class PortalController : ControllerBase
         StatusCode(StatusCodes.Status403Forbidden, new { error = reason });
 
 
+    private async Task<PortalUpdateModelsRequest?> ReadUpdateModelsRequestAsync(CancellationToken ct)
+    {
+        if (Request.ContentLength is null or 0) return null;
+        var contentType = Request.ContentType ?? string.Empty;
+        if (!contentType.Contains("application/json", StringComparison.OrdinalIgnoreCase)) return null;
+        try
+        {
+            return await Request.ReadFromJsonAsync<PortalUpdateModelsRequest>(cancellationToken: ct);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
     private async Task<CatalogueImage?> SourceImageAsync(RegistryModelCatalog catalogue, CancellationToken ct)
     {
         var (registry, _) = ZuloOne.ControlPlane.Api.ImagesController.SplitImage(_fleet.DefaultImage);
@@ -663,16 +699,22 @@ public class PortalController : ControllerBase
             : images.FirstOrDefault(i => string.Equals(i.Image, source, StringComparison.Ordinal));
     }
 
-    private static async Task<Dictionary<string, string>> OfferedModelsAsync(
+    private static async Task<Dictionary<string, ModelGraphNode>> ModelGraphAsync(
         CatalogueImage? source,
         ImageTreeReader trees,
         CancellationToken ct)
     {
-        if (source is null) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (source is null) return new Dictionary<string, ModelGraphNode>(StringComparer.OrdinalIgnoreCase);
 
-        var graph = (await trees.ReadGraphAsync(source.Image, ct))
+        return (await trees.ReadGraphAsync(source.Image, ct))
             .ToDictionary(n => n.Name, StringComparer.OrdinalIgnoreCase);
+    }
 
+    private static Dictionary<string, string> OfferedModels(
+        CatalogueImage? source,
+        IReadOnlyDictionary<string, ModelGraphNode> graph)
+    {
+        if (source is null) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         return source.Models
             .Where(m => !StandModel.IsShippedName(m.Name) && !TestFixtureModel.IsName(m.Name))
             .Where(m => !graph.TryGetValue(m.Name, out var node) || !node.IsSystem)
@@ -683,6 +725,34 @@ public class PortalController : ControllerBase
                     .OrderByDescending(v => v, Comparer<string>.Create(ModelGraph.CompareVersions))
                     .First(),
                 StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static List<object> UpdateGroup(
+        string modelName,
+        IReadOnlyDictionary<string, InstalledModel> installed,
+        IReadOnlyDictionary<string, string> offered,
+        IReadOnlyDictionary<string, ModelGraphNode> graph)
+    {
+        return ModelGraph.Expand([modelName], graph)
+            .Where(name => installed.TryGetValue(name, out var row)
+                           && !row.IsSystem
+                           && offered.TryGetValue(name, out var newest)
+                           && ModelGraph.IsOutdated(row.Version, newest))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name =>
+            {
+                var row = installed[name];
+                return new
+                {
+                    name,
+                    version = row.Version,
+                    latest = offered[name],
+                    selected = string.Equals(name, modelName, StringComparison.OrdinalIgnoreCase),
+                };
+            })
+            .Cast<object>()
+            .ToList();
     }
     private Guid? AccountId() =>
         Guid.TryParse(User.FindFirst(PortalSessionHandler.AccountIdClaim)?.Value, out var id) ? id : null;
