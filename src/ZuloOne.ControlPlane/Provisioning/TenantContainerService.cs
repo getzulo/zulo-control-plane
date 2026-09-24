@@ -168,10 +168,6 @@ public sealed class TenantContainerService
             env.Add($"Logging__Mongo__Database={tenant.LogDatabase}");
         }
 
-        // Remove a stale container of the same name first — provisioning must be
-        // retryable after a failure, not blocked by its own leftovers.
-        await RemoveAsync(name, ct);
-
         // The image must be on THIS daemon. CreateContainerAsync does not pull, and
         // the failure is a bare
         //   Docker API responded with status code=NotFound, No such image: …
@@ -179,6 +175,11 @@ public sealed class TenantContainerService
         // upgrade to a freshly published tag took a live tenant down instead of
         // failing before touching it.
         await EnsureImageAsync(tenant.ImageTag, ct);
+
+        // Remove a stale container of the same name only after the target image is
+        // known to be available. A missing tag is an operator/configuration problem;
+        // it must not take down the old container on a recreate or upgrade.
+        await RemoveAsync(name, ct);
 
         var created = await _docker.Containers.CreateContainerAsync(new CreateContainerParameters
         {
@@ -313,7 +314,7 @@ public sealed class TenantContainerService
     /// tenant that needs nothing from it.
     /// </para>
     /// </summary>
-    private async Task EnsureImageAsync(string image, CancellationToken ct)
+    public async Task EnsureImageAsync(string image, CancellationToken ct)
     {
         try
         {

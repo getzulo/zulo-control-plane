@@ -120,6 +120,7 @@ builder.Services.AddScoped<TenantLogDatabaseProvisioner>();
 builder.Services.AddScoped<TenantContainerService>();
 builder.Services.AddScoped<TenantCloneService>();
 builder.Services.AddScoped<DemoPool>();
+builder.Services.AddSingleton<DemoNudge>();
 builder.Services.AddScoped<TenantHealthProbe>();
 builder.Services.AddScoped<TenantStatsService>();
 builder.Services.AddScoped<TenantModelsService>();
@@ -153,17 +154,20 @@ builder.Services.AddScoped<IJobHandler, RestoreJobHandler>();
 builder.Services.AddScoped<IJobHandler, SwapJobHandler>();
 builder.Services.AddScoped<IJobHandler, UpgradeJobHandler>();
 builder.Services.AddScoped<IJobHandler, RolloutJobHandler>();
-        builder.Services.AddScoped<LiveSnapshotRestore>();
-        builder.Services.AddScoped<IJobHandler, InstallModelsJobHandler>();
-        builder.Services.AddScoped<IJobHandler, UninstallModelsJobHandler>();
-        builder.Services.AddScoped<IJobHandler, CompileModelsJobHandler>();
+builder.Services.AddScoped<LiveSnapshotRestore>();
+builder.Services.AddScoped<IJobHandler, InstallModelsJobHandler>();
+builder.Services.AddScoped<IJobHandler, UninstallModelsJobHandler>();
+builder.Services.AddScoped<IJobHandler, CompileModelsJobHandler>();
 builder.Services.AddScoped<IJobHandler, RecreateJobHandler>();
+builder.Services.AddScoped<IJobHandler, DemoProvisionJobHandler>();
+builder.Services.AddScoped<IJobHandler, DemoTemplateJobHandler>();
 builder.Services.AddScoped<IJobHandler, PruneJobHandler>();
 builder.Services.AddScoped<IJobHandler, RegistrySnapshotJobHandler>();
 builder.Services.AddSingleton<ClusterBackupGate>();
 builder.Services.AddSingleton<NodePruneGate>();
 builder.Services.AddScoped<IJobHandler, BackupJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
+builder.Services.AddHostedService<DemoPoolService>();
 // Only ENQUEUES: a registry dump, then a prune. Both run through the queue, so
 // they inherit the one-at-a-time execution that keeps a delete away from a dump
 // being written or a restore reading one.
@@ -178,6 +182,7 @@ builder.Services.AddHttpClient("registry", client => client.Timeout = TimeSpan.F
 // manages.
 builder.Services.Configure<SnapshotSettings>(builder.Configuration.GetSection("Snapshots"));
 builder.Services.AddScoped<PgTools>();
+builder.Services.AddScoped<SnapshotWriter>();
 
 // Singleton: the override layer is read on the provisioning path, so reads must
 // be free. Populated once after the migration below and reloaded on every write.

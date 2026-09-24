@@ -94,6 +94,12 @@ public enum JobKind
     /// </summary>
     Recreate,
 
+    /// <summary>Build one ready-to-claim demo workspace from the blessed template.</summary>
+    DemoProvision,
+
+    /// <summary>Snapshot the golden demo tenant and make that dump the active template.</summary>
+    DemoTemplate,
+
     /// <summary>
     /// Cascade-delete one model from a running tenant. Snapshot first; restored
     /// automatically if the delete or the compile afterwards fails. Incoming

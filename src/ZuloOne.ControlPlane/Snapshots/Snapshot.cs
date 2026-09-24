@@ -30,6 +30,9 @@ public enum SnapshotKind
     /// </para>
     /// </remarks>
     Registry,
+
+    /// <summary>A blessed source for the warm demo pool.</summary>
+    DemoTemplate,
 }
 
 /// <summary>

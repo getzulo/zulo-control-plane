@@ -265,3 +265,25 @@ public sealed class DemoQuotaTests
             Decide(pooledAvailable: 0, liveDemos: 0, maxConcurrent: 0, queueDepth: 0, maxQueue: 0));
     }
 }
+
+public sealed class DemoPoolServiceTests
+{
+    [Theory]
+    [InlineData(0, 0, 0, 2, 6, 2)]
+    [InlineData(1, 0, 1, 2, 6, 1)]
+    [InlineData(1, 1, 2, 2, 6, 0)]
+    [InlineData(0, 0, 6, 2, 6, 0)]
+    [InlineData(0, 1, 5, 2, 6, 0)]
+    [InlineData(5, 0, 5, 2, 6, 0)]
+    public void Build_count_respects_pool_target_and_host_ceiling(
+        int available,
+        int scheduled,
+        int live,
+        int poolTarget,
+        int maxConcurrent,
+        int expected)
+    {
+        Assert.Equal(expected, DemoPoolService.CalculateBuildCount(
+            available, scheduled, live, poolTarget, maxConcurrent));
+    }
+}

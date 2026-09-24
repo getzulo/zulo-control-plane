@@ -72,8 +72,33 @@ jobs:
       # Pointed at the csproj rather than a new .sln deliberately: a solution
       # file would be a second place to remember to add projects to, and this
       # repository has exactly two.
+      - name: Start test PostgreSQL
+        id: test-pg
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="cp-test-pg-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --name "$name" \
+            -e POSTGRES_PASSWORD=probe -e POSTGRES_DB=cptest \
+            -p 127.0.0.1::5432 postgres:17-alpine >/dev/null
+          for i in $(seq 1 30); do
+            docker exec "$name" pg_isready -q -U postgres -d cptest && break
+            sleep 1
+          done
+          docker exec "$name" pg_isready -q -U postgres -d cptest
+          port=$(docker port "$name" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n1)
+          echo "container=${name}" >> "$GITHUB_OUTPUT"
+          echo "connection=Host=127.0.0.1;Port=${port};Database=cptest;Username=postgres;Password=probe" >> "$GITHUB_OUTPUT"
+
       - name: Test
+        env:
+          TEST_PG_CONNECTION: ${{ steps.test-pg.outputs.connection }}
         run: dotnet test tests/ZuloOne.ControlPlane.Tests/ZuloOne.ControlPlane.Tests.csproj -c Release
+
+      - name: Clean up test PostgreSQL
+        if: always()
+        shell: bash
+        run: docker rm -f "${{ steps.test-pg.outputs.container }}" 2>/dev/null || true
 
       # Non-blocking on purpose. .NET 9+ enables NuGet Audit by default, and a
       # third party's advisory landing overnight must not become our outage.
@@ -348,7 +373,7 @@ jobs:
           set -euo pipefail
           for path in /api/tenants /api/fleet/health /api/auth/context; do
             body=$(docker exec "$SMOKE_CP" curl -s "http://localhost:8080${path}" || true)
-            if printf '%s' "$body" | grep -qiE 'databasePassword|jwtSigningKey'; then
+            if printf '%s' "$body" | grep -qiE 'databasePassword|jwtSigningKey|adminPasswordOnce|logPassword'; then
               echo "::error::${path} leaked a secret field."
               exit 1
             fi

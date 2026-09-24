@@ -123,6 +123,9 @@ public sealed class TenantProvisioner
 
         try
         {
+            if (job is not null) await job.StepAsync("Checking the image", 5, ct);
+            await _containers.EnsureImageAsync(tenant.ImageTag, ct);
+
             if (job is not null) await job.StepAsync("Creating the database", 10, ct);
             var (database, role, password, connectionString) = await _databases.CreateAsync(slug, ct);
             tenant.DatabaseName = database;

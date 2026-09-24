@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Alert, Anchor, Badge, Card, Grid, Group, Loader, Progress, SimpleGrid, Stack, Text, Title } from '@mantine/core';
-import { IconAlertTriangle, IconDatabase, IconServer } from '@tabler/icons-react';
-import { api, type Cluster, type FleetHealth, type Job, type Snapshot } from './api';
+import { IconAlertTriangle, IconDatabase, IconFlask, IconServer } from '@tabler/icons-react';
+import { api, type Cluster, type DemoOverview, type FleetHealth, type Job, type Snapshot } from './api';
 import { CHECK_COLOR, JOB_COLOR, ROLE_COLOR, ROLE_LABEL, ago, fmt, fmtBytes, usePoll } from './shared';
 
 function Stat({ label, value, color, hint }: { label: string; value: string | number; color?: string; hint?: string }) {
@@ -20,19 +20,21 @@ export function OverviewPage() {
   const [cluster, setCluster] = useState<Cluster | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [demos, setDemos] = useState<DemoOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     // Settled, not all: the cluster being unreachable must not blank the fleet
     // numbers, which is exactly when somebody needs them.
-    const [f, c, j, s] = await Promise.allSettled([
-      api.fleetHealth(), api.cluster(), api.jobs({ limit: 12 }), api.snapshots(),
+    const [f, c, j, s, d] = await Promise.allSettled([
+      api.fleetHealth(), api.cluster(), api.jobs({ limit: 12 }), api.snapshots(), api.demoOverview(),
     ]);
     if (f.status === 'fulfilled') setFleet(f.value); else setError(f.reason?.message ?? 'Could not read the fleet');
     if (c.status === 'fulfilled') setCluster(c.value);
     if (j.status === 'fulfilled') setJobs(j.value);
     if (s.status === 'fulfilled') setSnapshots(s.value.snapshots);
+    if (d.status === 'fulfilled') setDemos(d.value);
     setLoading(false);
   }, []);
 
@@ -90,6 +92,14 @@ export function OverviewPage() {
         <Alert color="grape">
           {copies.length} restored {copies.length === 1 ? 'copy is' : 'copies are'} waiting on a decision, each costing
           a container and a database. <Anchor component={Link} to="/backups" size="sm">Review them →</Anchor>
+        </Alert>
+      )}
+
+      {demos && (
+        <Alert color={demos.enabled ? 'cyan' : 'gray'} icon={<IconFlask size={16} />}>
+          Demo pool: {demos.tenants.filter((t) => t.demo === 'Pooled').length} ready,{' '}
+          {demos.tenants.filter((t) => t.demo === 'Claimed').length} claimed, {demos.queued} queued.{' '}
+          <Anchor component={Link} to="/demos" size="sm">Open demos →</Anchor>
         </Alert>
       )}
 

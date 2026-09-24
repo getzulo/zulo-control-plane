@@ -120,6 +120,9 @@ export interface Tenant {
   imageTag: string;
   adminEmail?: string | null;
   plan?: string | null;
+  demo?: 'Golden' | 'Pooled' | 'Claimed' | null;
+  expiresAt?: string | null;
+  claimedAt?: string | null;
   databaseName?: string | null;
   containerId?: string | null;
   lastHealthAt?: string | null;
@@ -150,6 +153,8 @@ export type JobKind =
   | 'CompileModels'
   /** Recreate the container so boot env (developer stand) applies. */
   | 'Recreate'
+  | 'DemoProvision'
+  | 'DemoTemplate'
   /** Cascade-delete one model from a tenant that keeps running. */
   | 'UninstallModels'
   /** Retention sweep. Runs through the queue so it cannot race a dump or a restore. */
@@ -373,7 +378,7 @@ export interface Snapshot {
   tenantSlug: string;
   databaseName: string;
   sizeBytes: number;
-  kind: 'Manual' | 'PreUpgrade' | 'PreSwap' | 'Registry';
+  kind: 'Manual' | 'PreUpgrade' | 'PreSwap' | 'Registry' | 'DemoTemplate';
   note?: string | null;
   imageTag?: string | null;
   createdAt: string;
@@ -416,6 +421,43 @@ export interface FleetHealth {
   /** Active tenants that failed their last probe. */
   down: number;
   tenants: Tenant[];
+}
+
+export interface DemoOverview {
+  enabled: boolean;
+  templateSnapshotId?: string | null;
+  poolTarget: number;
+  maxConcurrent: number;
+  queued: number;
+  tenants: {
+    id: string;
+    slug: string;
+    demo: 'Golden' | 'Pooled' | 'Claimed';
+    status: TenantStatus;
+    health: TenantHealth;
+    expiresAt?: string | null;
+    claimedAt?: string | null;
+    demoRequestId?: string | null;
+    createdAt: string;
+  }[];
+  jobs: {
+    id: string;
+    kind: 'DemoProvision' | 'DemoTemplate';
+    state: JobState;
+    step?: string | null;
+    error?: string | null;
+    createdAt: string;
+  }[];
+}
+
+export interface DemoClaim {
+  requestId: string;
+  id: string;
+  slug: string;
+  url: string;
+  user: string;
+  password: string;
+  expiresAt: string;
 }
 
 export interface AuthContext {
@@ -527,6 +569,18 @@ export const api = {
 
   fleetHealth: () => request<FleetHealth>('/api/fleet/health'),
   listTenants: () => request<Tenant[]>('/api/tenants'),
+
+  demoOverview: () => request<DemoOverview>('/api/demo/admin/overview'),
+  demoProvision: () => request<{ jobId: string }>('/api/demo/admin/provision', { method: 'POST' }),
+  demoTemplate: () => request<{ jobId: string }>('/api/demo/admin/template', { method: 'POST' }),
+  demoDrain: () => request<{ success: boolean; markedForReaping: number }>(
+    '/api/demo/admin/drain', { method: 'POST' }),
+  demoClaim: (email: string, company?: string) => request<DemoClaim>(
+    '/api/demo/admin/claim', { method: 'POST', body: JSON.stringify({ email, company: company || null }) }),
+  demoExtend: (id: string, hours: number) => request<{ success: boolean; expiresAt: string }>(
+    `/api/demo/admin/${id}/extend`, { method: 'POST', body: JSON.stringify({ hours }) }),
+  demoKill: (id: string, confirmSlug: string) => request<{ success: boolean; deleted: string }>(
+    `/api/demo/admin/${id}`, { method: 'DELETE', body: JSON.stringify({ confirmSlug }) }),
 
   /** Returns 202 with the tenant AND the job building it. */
   createTenant: (body: { slug: string; displayName?: string; adminEmail: string; imageTag?: string; plan?: string; developerStand?: boolean }) =>

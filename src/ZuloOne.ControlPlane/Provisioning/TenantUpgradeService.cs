@@ -124,6 +124,18 @@ public sealed class TenantUpgradeService
                 $"'{tenant.Slug}' has no database — provision it before moving it.", null, false, []);
         }
 
+        try
+        {
+            await Step($"checking {targetTag}", 5, ct);
+            await _containers.EnsureImageAsync(targetTag, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new UpgradeOutcome(false,
+                $"{targetTag} is not available on the Docker daemon or in the registry: {ex.Message}",
+                null, false, []);
+        }
+
         var what = tagMoves ? $"{previousTag} → {targetTag}" : "a new model set";
         Snapshot snapshot;
         try

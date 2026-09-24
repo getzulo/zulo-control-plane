@@ -620,6 +620,9 @@ public class TenantsController : ControllerBase
         t.ImageTag,
         t.AdminEmail,
         t.Plan,
+        demo = t.Demo == null ? null : t.Demo.ToString(),
+        t.ExpiresAt,
+        t.ClaimedAt,
         t.DatabaseName,
         containerId = t.ContainerId == null ? null : t.ContainerId[..Math.Min(12, t.ContainerId.Length)],
         // The FLAG, never the value — the value comes only from the explicit

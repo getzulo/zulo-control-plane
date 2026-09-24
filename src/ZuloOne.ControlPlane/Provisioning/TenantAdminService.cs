@@ -40,7 +40,8 @@ public sealed class TenantAdminService
     /// the account named <c>admin</c> that provisioning seeds.
     /// </param>
     public async Task<(bool Found, string Password, string User)> ResetPasswordAsync(
-        Tenant tenant, string? userName, CancellationToken ct = default)
+        Tenant tenant, string? userName, CancellationToken ct = default,
+        bool mustChangePassword = true)
     {
         if (string.IsNullOrWhiteSpace(tenant.DatabaseName))
             throw new InvalidOperationException($"'{tenant.Slug}' has no database.");
@@ -60,7 +61,7 @@ public sealed class TenantAdminService
             UPDATE "MetaUsers"
                SET "PasswordHash" = @hash,
                    "IsLocked" = false,
-                   "MustChangePassword" = true,
+                   "MustChangePassword" = @mustChange,
                    "LastPasswordChange" = now() AT TIME ZONE 'utc',
                    "ModifiedDateTime" = now() AT TIME ZONE 'utc'
              WHERE "MetaId" = (
@@ -74,6 +75,7 @@ public sealed class TenantAdminService
         await using var cmd = new NpgsqlCommand(sql, connection);
         cmd.Parameters.AddWithValue("hash", hash);
         cmd.Parameters.AddWithValue("who", userName?.Trim() is { Length: > 0 } n ? n : (tenant.AdminEmail ?? "admin"));
+        cmd.Parameters.AddWithValue("mustChange", mustChangePassword);
 
         var name = await cmd.ExecuteScalarAsync(ct) as string;
         if (name is null)
@@ -84,6 +86,7 @@ public sealed class TenantAdminService
             await using var fallback = new NpgsqlCommand(sql, connection);
             fallback.Parameters.AddWithValue("hash", hash);
             fallback.Parameters.AddWithValue("who", "admin");
+            fallback.Parameters.AddWithValue("mustChange", mustChangePassword);
             name = await fallback.ExecuteScalarAsync(ct) as string;
         }
 

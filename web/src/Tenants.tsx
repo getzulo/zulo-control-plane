@@ -79,6 +79,7 @@ export function TenantsPage() {
                     <Group gap={6}>
                       <Text fw={600}>{t.slug}</Text>
                       {t.restoredFromSlug && <Badge size="xs" color="grape" variant="light">copy</Badge>}
+                      {t.demo && <Badge size="xs" color="cyan" variant="light">{t.demo.toLowerCase()}</Badge>}
                       {t.developerStand && <Badge size="xs" color="violet" variant="light">dev stand</Badge>}
                     </Group>
                     {t.displayName && <Text size="xs" c="dimmed">{t.displayName}</Text>}

@@ -70,7 +70,8 @@ public sealed class TenantCloneService
         string snapshotFile,
         long snapshotSizeBytes,
         string rollbackNoun,
-        CancellationToken ct)
+        CancellationToken ct,
+        ContainerLimits? limits = null)
     {
         // A KEY OF ITS OWN, never the source's. A token minted in the copy must
         // not be valid against the tenant it was cloned from: the copy exists to
@@ -113,7 +114,7 @@ public sealed class TenantCloneService
             if (!ok) throw new InvalidOperationException("pg_restore failed — see the log above.");
 
             await context.StepAsync("Starting the container", 60, ct);
-            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, ct: ct);
+            tenant.ContainerId = await _containers.RunAsync(tenant, connectionString, limits, ct);
             await _db.SaveChangesAsync(ct);
 
             // THE quick check. First boot runs migrations against the restored data,
