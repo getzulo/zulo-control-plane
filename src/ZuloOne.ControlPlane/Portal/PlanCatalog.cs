@@ -26,6 +26,9 @@ public enum PortalCapability
     /// <summary>Let another person in, or put them out.</summary>
     ManageMembers,
 
+    /// <summary>Install newer revisions of the business models already present.</summary>
+    ManageModels,
+
     /// <summary>
     /// Move the stand to the newest release.
     /// </summary>
@@ -294,7 +297,7 @@ public static class PlanCatalog
 
         // Role last, so that the answer a Member gets is about the stand's state
         // when that is the real obstacle, and about their role only when it is.
-        if (capability is PortalCapability.StopStartTenant or PortalCapability.ManageMembers
+        if (capability is PortalCapability.StopStartTenant or PortalCapability.ManageMembers or PortalCapability.ManageModels
             && role != MembershipRole.Owner)
         {
             return PortalDecision.No("Only the stand's owner can do this.");

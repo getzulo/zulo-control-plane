@@ -380,7 +380,7 @@ public class PortalController : ControllerBase
         [FromServices] ImageTreeReader trees,
         CancellationToken ct)
     {
-        var found = await ResolveAsync(id, ct, PortalCapability.UpgradeTenant);
+        var found = await ResolveAsync(id, ct, PortalCapability.ManageModels);
         if (found.Failure is { } failure) return failure;
         var tenant = found.Tenant!;
 
@@ -423,7 +423,7 @@ public class PortalController : ControllerBase
     [HttpPost("{id:guid}/compile-models")]
     public async Task<IActionResult> CompileModels(Guid id, CancellationToken ct)
     {
-        var found = await ResolveAsync(id, ct, PortalCapability.UpgradeTenant);
+        var found = await ResolveAsync(id, ct, PortalCapability.ManageModels);
         if (found.Failure is { } failure) return failure;
         var tenant = found.Tenant!;
 

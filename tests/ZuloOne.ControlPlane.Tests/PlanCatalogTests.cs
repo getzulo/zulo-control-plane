@@ -113,6 +113,7 @@ public sealed class PlanCatalogTests
     [InlineData(PortalCapability.RestartTenant)]
     [InlineData(PortalCapability.StopStartTenant)]
     [InlineData(PortalCapability.ManageMembers)]
+    [InlineData(PortalCapability.ManageModels)]
     public void A_suspended_stand_is_read_only_even_for_its_owner(PortalCapability capability)
     {
         var decision = PlanCatalog.Decide(
@@ -181,6 +182,7 @@ public sealed class PlanCatalogTests
     [Theory]
     [InlineData(PortalCapability.StopStartTenant)]
     [InlineData(PortalCapability.ManageMembers)]
+    [InlineData(PortalCapability.ManageModels)]
     public void Only_an_owner_stops_a_stand_or_changes_who_is_in_it(PortalCapability capability)
     {
         Assert.False(PlanCatalog.Decide(capability, Stand(), MembershipRole.Member, Now).Allowed);
@@ -205,6 +207,7 @@ public sealed class PlanCatalogTests
         Assert.True(PlanCatalog.Decide(PortalCapability.RestartTenant, stand, MembershipRole.Owner, Now).Allowed);
         Assert.True(PlanCatalog.Decide(PortalCapability.ResetUserPassword, stand, MembershipRole.Owner, Now).Allowed);
         Assert.True(PlanCatalog.Decide(PortalCapability.StopStartTenant, stand, MembershipRole.Owner, Now).Allowed);
+        Assert.True(PlanCatalog.Decide(PortalCapability.ManageModels, stand, MembershipRole.Owner, Now).Allowed);
     }
 
     /// <summary>
