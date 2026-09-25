@@ -16,6 +16,7 @@ public record PortalLoginRequest(string Email, string Password, string? Totp);
 public record PortalTokenRequest(string Token);
 public record PortalResetRequest(string Token, string Password);
 public record PortalForgotRequest(string Email);
+public record PortalDirectoryRequest(string Email);
 public record PortalChangePasswordRequest(string CurrentPassword, string NewPassword);
 
 /// <summary>
@@ -249,6 +250,50 @@ public class PortalAuthController : ControllerBase
         await _claims.ClaimAsync(account, ct);
 
         return Ok(new { token, expiresAt = expires, email = account.Email, displayName = account.DisplayName });
+    }
+
+    /// <summary>
+    /// Opens a portal session for an address the cabinet has already authenticated
+    /// at login.getzulo.com. The cabinet key is what makes the address trustworthy;
+    /// without it this would be a way to become any customer.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("directory")]
+    public async Task<IActionResult> Directory([FromBody] PortalDirectoryRequest request, CancellationToken ct)
+    {
+        if (!_settings.Enabled) return NotFound();
+        var expected = _settings.CabinetKey;
+        if (string.IsNullOrEmpty(expected)) return NotFound();
+
+        var presented = Request.Headers["X-Cabinet-Key"].ToString();
+        var got = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(presented));
+        var want = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(expected));
+        if (!CryptographicOperations.FixedTimeEquals(got, want))
+            return Unauthorized();
+
+        var email = Normalise(request.Email);
+        if (email is null) return BadRequest(new { error = "Which address?" });
+
+        var account = await _db.CustomerAccounts.FirstOrDefaultAsync(a => a.Email == email, ct);
+        if (account is null || account.EmailVerifiedAt is null)
+            return Ok(new { token = (string?)null });
+
+        if (account.LockedUntil is { } until && until > DateTime.UtcNow)
+            return Ok(new { token = (string?)null });
+
+        var (token, hash) = PortalTokens.Mint();
+        var expires = DateTime.UtcNow.AddHours(Math.Max(1, _settings.SessionHours));
+        _db.CustomerSessions.Add(new CustomerSession
+        {
+            CustomerAccountId = account.Id,
+            TokenHash = hash,
+            ExpiresAt = expires,
+            CreatedFromIp = ClientIp(),
+        });
+        await _db.SaveChangesAsync(ct);
+        await _claims.ClaimAsync(account, ct);
+
+        return Ok(new { token, expiresAt = expires, email = account.Email });
     }
 
     [AllowAnonymous]

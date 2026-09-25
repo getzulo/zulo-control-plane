@@ -69,6 +69,13 @@ public sealed class PortalSettings
     public bool ClaimByAdminEmail { get; set; } = true;
 
     /// <summary>
+    /// Shared with the getzulo.com cabinet. A directory sign-in presents this
+    /// key and an address; a verified portal account with that address receives
+    /// a portal session. Empty means the link is off.
+    /// </summary>
+    public string? CabinetKey { get; set; }
+
+    /// <summary>
     /// Path of the page that finishes verification, appended to
     /// <see cref="PublicUrl"/>. <c>{locale}</c> is replaced with the account's
     /// language.

@@ -54,6 +54,9 @@ export function TenantPage() {
   const [targetImage, setTargetImage] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [users, setUsers] = useState<{ name: string; email?: string | null; locked: boolean }[]>([]);
+  const [members, setMembers] = useState<{ id: string; email: string | null; role: string; verified: boolean }[]>([]);
+  const [memberEmail, setMemberEmail] = useState('');
+  const [memberRole, setMemberRole] = useState<string | null>('Owner');
   const [resetUser, setResetUser] = useState<string | null>(null);
   const job = useJob(jobId);
 
@@ -87,6 +90,7 @@ export function TenantPage() {
       ]);
       setModels(m);
       setTenant(t); setJobs(j); setSnapshots(s.snapshots); setError(null);
+      try { setMembers((await api.portalMembers(id)).members); } catch { /* the list is optional on this page */ }
       try {
         const fleet = await api.logTenants();
         setJournal(fleet.find((r) => r.slug === t.slug) ?? null);
@@ -581,6 +585,50 @@ export function TenantPage() {
           </Card>
         </Grid.Col>
       </Grid>
+
+      <Card withBorder padding="md">
+        <Text fw={600} mb="xs">Who can open this stand</Text>
+        <Text size="sm" c="dimmed" mb="sm">
+          The address must already have a portal account. This is the list the cabinet shows after sign-in.
+        </Text>
+        {members.length === 0 ? (
+          <Text size="sm" c="dimmed" mb="sm">Nobody yet.</Text>
+        ) : (
+          <Table fz="sm" mb="sm">
+            <Table.Thead><Table.Tr>
+              <Table.Th>Address</Table.Th><Table.Th>Role</Table.Th><Table.Th />
+            </Table.Tr></Table.Thead>
+            <Table.Tbody>
+              {members.map((m) => (
+                <Table.Tr key={m.id}>
+                  <Table.Td>
+                    {m.email}
+                    {!m.verified && <Badge ml="xs" color="yellow" variant="light">unverified</Badge>}
+                  </Table.Td>
+                  <Table.Td>{m.role}</Table.Td>
+                  <Table.Td>
+                    <Button size="xs" variant="subtle" color="red" onClick={async () => {
+                      try { await api.revokeMember(id, m.id); await refresh(); }
+                      catch (e) { setError((e as Error).message); }
+                    }}>Remove</Button>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        )}
+        <Group align="flex-end">
+          <TextInput label="Address" placeholder="name@company.com" value={memberEmail} onChange={(e) => setMemberEmail(e.currentTarget.value)} style={{ flex: 1 }} />
+          <Select label="Role" data={['Owner', 'Member']} value={memberRole} onChange={setMemberRole} w={140} />
+          <Button onClick={async () => {
+            try {
+              await api.grantMember(id, memberEmail.trim(), memberRole ?? 'Owner');
+              setMemberEmail('');
+              await refresh();
+            } catch (e) { setError((e as Error).message); }
+          }}>Add</Button>
+        </Group>
+      </Card>
 
       <Card withBorder padding={0}>
         <Tabs defaultValue="activity" onChange={(v) => { if (v === 'logs' && !logs) void loadLogs(); }}>

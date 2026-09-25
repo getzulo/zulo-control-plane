@@ -610,6 +610,17 @@ export const api = {
     matchesPinned?: boolean | null; error?: string;
   }>(`/api/tenants/${id}/running`),
 
+  portalMembers: (id: string) =>
+    request<{ members: { id: string; email: string | null; displayName: string | null; role: string; verified: boolean }[] }>(
+      `/api/tenants/${id}/members`),
+
+  grantMember: (id: string, email: string, role: string) =>
+    request<{ granted?: boolean; updated?: boolean; email: string; role: string; note?: string | null }>(
+      `/api/tenants/${id}/members`, { method: 'POST', body: JSON.stringify({ email, role }) }),
+
+  revokeMember: (id: string, membershipId: string) =>
+    request<{ revoked: boolean }>(`/api/tenants/${id}/members/${membershipId}`, { method: 'DELETE' }),
+
   tenantUsers: (id: string) =>
     request<{ name: string; email?: string | null; active: boolean; locked: boolean }[]>(
       `/api/tenants/${id}/users`),
