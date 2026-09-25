@@ -47,15 +47,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // Signing out of the site happens in another tab. That tab can clear this
+  // cookie, but this page will keep showing the last screen until something
+  // here notices. A redirect that never reaches our API means Access has
+  // taken the session back.
+  useEffect(() => {
+    if (ctx?.mode !== 'access') return;
+    const timer = window.setInterval(() => {
+      void fetch('/api/auth/context', { credentials: 'same-origin', cache: 'no-store', redirect: 'manual' })
+        .then(async (response) => {
+          if (response.type === 'opaqueredirect' || response.status === 401) {
+            window.location.reload();
+            return;
+          }
+          if (!response.ok) return;
+          const body = await response.json().catch(() => null) as { authenticated?: boolean } | null;
+          if (!body?.authenticated) window.location.reload();
+        })
+        .catch(() => { /* a blip is not a signed-out session */ });
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [ctx?.mode]);
+
   const signOut = useCallback(async () => {
     if (ctx?.mode === 'access') {
-      // The panel cookie and the directory cookie are different hosts. This tab
-      // has to visit both: the directory first, which then continues to the
-      // Access logout and drops the panel cookie.
-      const panel = 'https://cp.zulo.one/cdn-cgi/access/logout';
-      window.location.assign(
-        'https://login.getzulo.com/logout?post_logout_redirect_uri=' + encodeURIComponent(panel),
-      );
+      // Directory logout continues to the Access logout, which is the only
+      // request that can drop the panel cookie.
+      window.location.assign('https://login.getzulo.com/logout');
       return;
     }
     if (ctx?.mode === 'local') {
