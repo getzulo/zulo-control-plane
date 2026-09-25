@@ -80,9 +80,12 @@ export default function App() {
             )}
             <RefreshButton />
             <ColorSchemeToggle />
-            {auth.ctx?.mode === 'local' && (
+            {auth.ctx?.authenticated && (
               <UnstyledButton onClick={() => void auth.signOut()} title="Sign out">
-                <IconLogout size={18} />
+                <Group gap={6}>
+                  <IconLogout size={18} />
+                  <Text size="sm">Sign out</Text>
+                </Group>
               </UnstyledButton>
             )}
           </Group>

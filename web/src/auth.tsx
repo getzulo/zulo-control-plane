@@ -48,8 +48,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const signOut = useCallback(async () => {
-    // Behind Access there is no local session to end — signing out means ending
-    // the Cloudflare one, which only Cloudflare can do.
+    if (ctx?.mode === 'access') {
+      // The panel cookie and the directory cookie are different hosts. This tab
+      // has to visit both: the directory first, which then continues to the
+      // Access logout and drops the panel cookie.
+      const panel = 'https://cp.zulo.one/cdn-cgi/access/logout';
+      window.location.assign(
+        'https://login.getzulo.com/logout?post_logout_redirect_uri=' + encodeURIComponent(panel),
+      );
+      return;
+    }
     if (ctx?.mode === 'local') {
       try { await api.logout(); } catch { /* the token may already be gone */ }
       token.set(null);
