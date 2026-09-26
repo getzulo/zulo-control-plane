@@ -1,12 +1,12 @@
 ﻿import { NavLink as RouterNavLink, Route, Routes, useLocation } from 'react-router-dom';
 import {
-  ActionIcon, AppShell, Badge, Burger, Group, NavLink, ScrollArea, Text, ThemeIcon, Tooltip,
+  ActionIcon, AppShell, Badge, Burger, Group, Menu, NavLink, ScrollArea, Text, ThemeIcon, Tooltip,
   UnstyledButton, useMantineColorScheme,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconMoon,
-  IconFlask, IconNotes, IconPackage, IconPackages, IconServer2, IconSettings, IconSun,
+  IconFlask, IconNotes, IconPackage, IconPackages, IconServer2, IconSettings, IconSun, IconUser,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp, RefreshButton, RefreshProvider } from './shared';
@@ -74,32 +74,41 @@ export default function App() {
             {/* Which door you came through matters when something is wrong: over the
                 tunnel Cloudflare is bypassed entirely, and that is worth seeing. */}
             {auth.ctx && auth.ctx.authenticated && (
-              <a
-                className="zulo-person"
-                href={auth.ctx.accountUrl ?? 'https://login.getzulo.com/account'}
-              >
-                {auth.ctx.picture
-                  ? <img className="zulo-person-mark" src={auth.ctx.picture} alt="" />
-                  : <span className="zulo-person-mark" aria-hidden />}
-                <span className="zulo-person-text">
-                  <strong>{auth.ctx.name ?? auth.ctx.email ?? 'signed in'}</strong>
-                  <em>{auth.ctx.email} · {auth.ctx.mode === 'directory' ? 'directory' : auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}</em>
-                </span>
-              </a>
+              <Menu position="bottom-end" shadow="sm" width={220}>
+                <Menu.Target>
+                  <UnstyledButton className="zulo-person" aria-label="Account menu">
+                    {auth.ctx.picture
+                      ? <img className="zulo-person-mark" src={auth.ctx.picture} alt="" />
+                      : <span className="zulo-person-mark" aria-hidden />}
+                    <span className="zulo-person-text">
+                      <strong>{auth.ctx.name ?? auth.ctx.email ?? 'signed in'}</strong>
+                      <em>{auth.ctx.email} · {auth.ctx.mode === 'directory' ? 'directory' : auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}</em>
+                    </span>
+                  </UnstyledButton>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item
+                    component="a"
+                    href={auth.ctx.accountUrl ?? 'https://login.getzulo.com/account'}
+                    leftSection={<IconUser size={16} />}
+                  >
+                    Account
+                  </Menu.Item>
+                  <Menu.Item
+                    color="red"
+                    leftSection={<IconLogout size={16} />}
+                    onClick={() => void auth.signOut()}
+                  >
+                    Sign out
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
             )}
             {auth.ctx && !auth.ctx.authenticated && (
               <Text size="xs" c="dimmed">not signed in</Text>
             )}
             <RefreshButton />
             <ColorSchemeToggle />
-            {auth.ctx?.authenticated && (
-              <UnstyledButton onClick={() => void auth.signOut()} title="Sign out">
-                <Group gap={6}>
-                  <IconLogout size={18} />
-                  <Text size="sm">Sign out</Text>
-                </Group>
-              </UnstyledButton>
-            )}
           </Group>
         </Group>
       </AppShell.Header>

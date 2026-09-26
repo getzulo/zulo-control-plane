@@ -10,6 +10,12 @@
   background: rgba(255, 255, 255, 0.86);
   text-decoration: none;
 }
+button.zulo-person {
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: start;
+}
 .zulo-person:hover {
   border-color: rgba(13, 40, 73, 0.28);
 }
