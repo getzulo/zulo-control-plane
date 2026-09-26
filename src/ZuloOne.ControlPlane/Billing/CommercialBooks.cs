@@ -89,6 +89,13 @@ public sealed class CommercialBooks
     public async Task<JsonElement> BankPayAsync(string bodyJson, CancellationToken ct)
         => await PayloadObjectAsync("bank-pay", bodyJson, ct);
 
+    /// <summary>
+    /// Posts a Stripe <c>CustomerPayment</c>. Body: standSlug, sessionId
+    /// (required). Duplicate sessionId is idempotent in the books.
+    /// </summary>
+    public async Task<JsonElement> StripePayAsync(string bodyJson, CancellationToken ct)
+        => await PayloadObjectAsync("stripe-pay", bodyJson, ct);
+
     private async Task<JsonElement> PayloadArrayAsync(string action, string? bodyJson, CancellationToken ct)
     {
         var payloadText = await PayloadTextAsync(action, bodyJson, ct);

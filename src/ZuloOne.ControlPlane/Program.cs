@@ -73,6 +73,21 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
+
+    // Stripe webhook: anonymous write guarded by HMAC. Same CF-Connecting-IP
+    // partitioning as the other public endpoints. Generous enough for Stripe
+    // retries, tight enough to blunt a flood of forged posts.
+    options.AddPolicy(ZuloOne.ControlPlane.Api.StripeWebhookRateLimit.Policy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
 });
 
 // In production the control plane serves the dashboard itself (same origin); this
@@ -140,6 +155,9 @@ builder.Services.AddScoped<TenantUpgradeService>();
 builder.Services.AddScoped<ImageTreeReader>();
 builder.Services.AddScoped<TenantApiClient>();
 builder.Services.AddScoped<CommercialBooks>();
+builder.Services.AddHttpClient(ZuloOne.ControlPlane.Billing.StripeCheckout.HttpClientName, client =>
+    client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<ZuloOne.ControlPlane.Billing.StripeCheckout>();
 builder.Services.AddScoped<TenantAdminService>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();

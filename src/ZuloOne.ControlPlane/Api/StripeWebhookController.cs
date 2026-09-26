@@ -1,0 +1,209 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using ZuloOne.ControlPlane.Billing;
+using ZuloOne.ControlPlane.Provisioning;
+using ZuloOne.ControlPlane.Registry;
+
+namespace ZuloOne.ControlPlane.Api;
+
+/// <summary>
+/// Stripe's only write into the control plane. Anonymous by necessity — Stripe
+/// has no operator session — and guarded by the webhook HMAC, not by the
+/// fallback operator policy.
+/// </summary>
+[ApiController]
+[Route("api/billing")]
+[Produces("application/json")]
+public sealed class StripeWebhookController : ControllerBase
+{
+    private readonly StripeCheckout _stripe;
+    private readonly CommercialBooks _books;
+    private readonly BillingConfig _config;
+    private readonly ControlPlaneDbContext _db;
+    private readonly TenantContainerService _containers;
+    private readonly ILogger<StripeWebhookController> _logger;
+
+    public StripeWebhookController(
+        StripeCheckout stripe,
+        CommercialBooks books,
+        BillingConfig config,
+        ControlPlaneDbContext db,
+        TenantContainerService containers,
+        ILogger<StripeWebhookController> logger)
+    {
+        _stripe = stripe;
+        _books = books;
+        _config = config;
+        _db = db;
+        _containers = containers;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// <c>POST /api/billing/stripe-webhook</c> — verify signature, ignore
+    /// unknown types, on <c>checkout.session.completed</c> post stripe-pay.
+    /// Always 200 on unknown/duplicate sessions so Stripe does not retry forever.
+    /// </summary>
+    [HttpPost("stripe-webhook")]
+    [AllowAnonymous]
+    [EnableRateLimiting(StripeWebhookRateLimit.Policy)]
+    public async Task<IActionResult> Post(CancellationToken ct)
+    {
+        string payload;
+        using (var reader = new StreamReader(Request.Body, Encoding.UTF8))
+            payload = await reader.ReadToEndAsync(ct);
+
+        var signature = Request.Headers["Stripe-Signature"].ToString();
+        if (!_stripe.VerifyWebhook(payload, signature))
+        {
+            _logger.LogWarning("Rejected Stripe webhook — bad signature");
+            return Unauthorized(new { error = "Bad Stripe signature." });
+        }
+
+        string? eventType = null;
+        string? sessionId = null;
+        string? standSlug = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payload) ? "{}" : payload);
+            var root = doc.RootElement;
+            eventType = ReadString(root, "type");
+
+            if (TryGetProperty(root, "data", out var data)
+                && TryGetProperty(data, "object", out var obj))
+            {
+                sessionId = ReadString(obj, "id");
+                if (TryGetProperty(obj, "metadata", out var meta))
+                    standSlug = ReadString(meta, "standSlug");
+            }
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Stripe webhook body was not JSON; acknowledging");
+            return Ok(new { received = true });
+        }
+
+        if (!string.Equals(eventType, "checkout.session.completed", StringComparison.Ordinal))
+            return Ok(new { received = true, ignored = eventType });
+
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(standSlug))
+        {
+            _logger.LogWarning(
+                "Stripe checkout.session.completed missing session id or standSlug metadata; acknowledging");
+            return Ok(new { received = true });
+        }
+
+        if (string.IsNullOrWhiteSpace(_config.TenantSlug))
+        {
+            _logger.LogWarning("Stripe pay skipped — Billing:TenantSlug is empty");
+            return Ok(new { received = true });
+        }
+
+        try
+        {
+            var body = JsonSerializer.Serialize(new { standSlug, sessionId });
+            var paid = await _books.StripePayAsync(body, ct);
+            var remaining = ReadDecimal(paid, "remaining");
+            var settled = remaining <= 0m
+                || string.Equals(ReadString(paid, "status"), "paid", StringComparison.OrdinalIgnoreCase);
+
+            if (settled)
+                await TryStartPaidAsync(standSlug, sessionId, ct);
+        }
+        catch (Exception ex)
+        {
+            // Unknown stand / books error: log and 200. A 500 makes Stripe retry
+            // forever for a session we will never be able to post.
+            _logger.LogWarning(ex,
+                "Stripe stripe-pay for session {SessionId} stand {StandSlug} failed; acknowledging",
+                sessionId, standSlug);
+        }
+
+        return Ok(new { received = true });
+    }
+
+    private async Task TryStartPaidAsync(string standSlug, string sessionId, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Slug == standSlug, ct);
+        if (tenant is null) return;
+
+        var action = BillingLicence.Decide(
+            tenant.Status,
+            tenant.StoppedByCustomer,
+            demo: tenant.Demo != null,
+            sliceOverdue: false,
+            sliceSettled: true);
+
+        if (action != BillingLicenceAction.StartPaid) return;
+
+        if (string.IsNullOrWhiteSpace(tenant.ContainerId))
+        {
+            _logger.LogWarning(
+                "Stripe pay settled {Slug} but StartPaid skipped: no container", tenant.Slug);
+            return;
+        }
+
+        try
+        {
+            await _containers.StartAsync(tenant.ContainerId!, ct);
+            tenant.Status = TenantStatus.Active;
+            tenant.LastError = null;
+            tenant.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            _logger.LogInformation(
+                "Started paid stand {Slug} after Stripe session {SessionId}",
+                tenant.Slug, sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Stripe pay settled {Slug} but StartPaid failed; sweep may retry",
+                tenant.Slug);
+        }
+    }
+
+    private static string? ReadString(JsonElement element, string name)
+        => TryGetProperty(element, name, out var value) ? value.GetString() : null;
+
+    private static decimal ReadDecimal(JsonElement element, string name)
+    {
+        if (!TryGetProperty(element, name, out var value)) return 0m;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var n)) return n;
+        return decimal.TryParse(value.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0m;
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+}
+
+/// <summary>Named rate-limit policy for the Stripe webhook (anonymous write).</summary>
+public static class StripeWebhookRateLimit
+{
+    public const string Policy = "stripe-webhook";
+}

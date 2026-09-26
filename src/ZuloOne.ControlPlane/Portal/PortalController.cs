@@ -1,7 +1,10 @@
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using ZuloOne.ControlPlane.Billing;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Auth;
@@ -43,6 +46,9 @@ public class PortalController : ControllerBase
     private readonly FleetConfig _fleet;
     private readonly TenantContainerService _containers;
     private readonly PortalSettings _settings;
+    private readonly CommercialBooks _books;
+    private readonly BillingConfig _billing;
+    private readonly StripeCheckout _stripe;
     private readonly ILogger<PortalController> _logger;
 
     public PortalController(
@@ -51,6 +57,9 @@ public class PortalController : ControllerBase
         IOptions<PortalSettings> settings,
         IJobQueue queue,
         FleetConfig fleet,
+        CommercialBooks books,
+        BillingConfig billing,
+        StripeCheckout stripe,
         ILogger<PortalController> logger)
     {
         _db = db;
@@ -58,6 +67,9 @@ public class PortalController : ControllerBase
         _settings = settings.Value;
         _queue = queue;
         _fleet = fleet;
+        _books = books;
+        _billing = billing;
+        _stripe = stripe;
         _logger = logger;
     }
 
@@ -322,6 +334,118 @@ public class PortalController : ControllerBase
         // from the public internet.
         var take = Math.Clamp(lines <= 0 ? 200 : lines, 1, 2000);
         return Ok(new { logs = await _containers.TailLogsAsync(tenant.ContainerId!, take, ct) });
+    }
+
+    /// <summary>
+    /// Issued and paid hosting invoices for this stand. Drafts never leave the
+    /// commercial ERP / operator panel.
+    /// </summary>
+    [HttpGet("{id:guid}/invoices")]
+    public async Task<IActionResult> Invoices(Guid id, CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct);
+        if (found.Failure is { } failure) return failure;
+        var tenant = found.Tenant!;
+
+        if (string.IsNullOrWhiteSpace(_billing.TenantSlug))
+        {
+            return Ok(new
+            {
+                invoices = Array.Empty<object>(),
+                bankDetails = _billing.BankDetails,
+                cardPayments = _stripe.IsConfigured,
+            });
+        }
+
+        try
+        {
+            var rows = await _books.ListForStandAsync(tenant.Slug, ct);
+            var invoices = CustomerVisibleInvoices(rows);
+            return Ok(new
+            {
+                invoices,
+                bankDetails = _billing.BankDetails,
+                cardPayments = _stripe.IsConfigured,
+            });
+        }
+        catch (Exception ex) when (ex.Message.Contains("The commercial tenant is down.", StringComparison.Ordinal))
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Billing is temporarily unavailable." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Opens Stripe Checkout for an Issued unpaid invoice. Owner only.
+    /// </summary>
+    [HttpPost("{id:guid}/invoices/{invoiceId}/checkout")]
+    public async Task<IActionResult> Checkout(Guid id, string invoiceId, CancellationToken ct)
+    {
+        var found = await ResolveAsync(id, ct);
+        if (found.Failure is { } failure) return failure;
+        var tenant = found.Tenant!;
+
+        if (found.Role != MembershipRole.Owner)
+            return Forbid403("Only the stand's owner can pay by card.");
+
+        if (!_stripe.IsConfigured)
+            return BadRequest(new { error = "Card payments are not configured." });
+
+        if (string.IsNullOrWhiteSpace(invoiceId))
+            return BadRequest(new { error = "invoice id is required." });
+
+        if (string.IsNullOrWhiteSpace(_billing.TenantSlug))
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Billing is temporarily unavailable." });
+
+        JsonElement rows;
+        try
+        {
+            rows = await _books.ListForStandAsync(tenant.Slug, ct);
+        }
+        catch (Exception ex) when (ex.Message.Contains("The commercial tenant is down.", StringComparison.Ordinal))
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Billing is temporarily unavailable." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        if (!TryFindIssuedUnpaid(rows, invoiceId, out var amount, out var number, out var currency))
+            return NotFound(new { error = "No such unpaid issued invoice for this stand." });
+
+        var returnUrl = CabinetStandUrl(tenant.Id);
+        if (string.IsNullOrWhiteSpace(returnUrl))
+            return BadRequest(new { error = "Portal:PublicUrl is not configured." });
+
+        try
+        {
+            var session = await _stripe.CreateSessionAsync(
+                invoiceId: invoiceId,
+                standSlug: tenant.Slug,
+                invoiceNumber: number ?? invoiceId,
+                amount: amount,
+                currency: currency,
+                successUrl: returnUrl,
+                cancelUrl: returnUrl,
+                ct);
+
+            _logger.LogInformation(
+                "Portal account {Actor} opened Stripe Checkout for invoice {InvoiceId} on {Slug}",
+                Email(), invoiceId, tenant.Slug);
+
+            return Ok(new { url = session.Url, sessionId = session.SessionId });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
 
@@ -759,6 +883,129 @@ public class PortalController : ControllerBase
 
     private string Email() =>
         User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "(unknown)";
+
+    /// <summary>
+    /// Where Stripe returns the customer after Checkout — the cabinet stand page.
+    /// Built from configured <see cref="PortalSettings.PublicUrl"/>, never Host.
+    /// </summary>
+    private string? CabinetStandUrl(Guid tenantId)
+    {
+        var root = (_settings.PublicUrl ?? string.Empty).TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(root)) return null;
+
+        var locale = string.IsNullOrWhiteSpace(_settings.DefaultLocale) ? "en" : _settings.DefaultLocale;
+        // getzulo.com cabinet: /{locale}/cabinet — stand detail is client state today;
+        // returning to the cabinet is enough for the customer to refresh invoices.
+        return $"{root}/{locale}/cabinet?stand={tenantId:D}";
+    }
+
+    private static List<object> CustomerVisibleInvoices(JsonElement rows)
+    {
+        var list = new List<object>();
+        if (rows.ValueKind != JsonValueKind.Array) return list;
+
+        foreach (var row in rows.EnumerateArray())
+        {
+            if (!IsIssuedDocument(row)) continue;
+
+            list.Add(new
+            {
+                id = ReadJsonString(row, "id") ?? "",
+                number = ReadJsonString(row, "number"),
+                standSlug = ReadJsonString(row, "standSlug"),
+                dueDate = ReadJsonString(row, "dueDate"),
+                remaining = ReadJsonDecimal(row, "remaining"),
+                status = ReadJsonString(row, "status") ?? "issued",
+                amount = ReadJsonDecimal(row, "amount"),
+                periodFrom = ReadJsonString(row, "periodFrom"),
+                periodTo = ReadJsonString(row, "periodTo"),
+            });
+        }
+
+        return list;
+    }
+
+    private static bool TryFindIssuedUnpaid(
+        JsonElement rows,
+        string invoiceId,
+        out decimal amount,
+        out string? number,
+        out string currency)
+    {
+        amount = 0m;
+        number = null;
+        currency = "usd";
+        if (rows.ValueKind != JsonValueKind.Array) return false;
+
+        foreach (var row in rows.EnumerateArray())
+        {
+            var id = ReadJsonString(row, "id");
+            if (!string.Equals(id, invoiceId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!IsIssuedDocument(row)) return false;
+
+            var remaining = ReadJsonDecimal(row, "remaining");
+            var status = ReadJsonString(row, "status");
+            var unpaid = remaining > 0m
+                || string.Equals(status, "issued", StringComparison.OrdinalIgnoreCase);
+            if (!unpaid) return false;
+
+            amount = ReadJsonDecimal(row, "amount");
+            if (amount <= 0m) amount = remaining;
+            number = ReadJsonString(row, "number");
+            var cur = ReadJsonString(row, "currency");
+            if (!string.IsNullOrWhiteSpace(cur)) currency = cur;
+            return amount > 0m;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Draft realizations stay in the commercial ERP. Paid is not a subtype —
+    /// status comes from remaining Receivable while subtype stays Issued.
+    /// </summary>
+    private static bool IsIssuedDocument(JsonElement row)
+    {
+        var subtype = ReadJsonString(row, "subtype");
+        if (string.Equals(subtype, "Draft", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return string.Equals(subtype, "Issued", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ReadJsonString(JsonElement element, string name)
+        => TryGetJsonProperty(element, name, out var value) ? value.GetString() : null;
+
+    private static decimal ReadJsonDecimal(JsonElement element, string name)
+    {
+        if (!TryGetJsonProperty(element, name, out var value)) return 0m;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var n)) return n;
+        return decimal.TryParse(value.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0m;
+    }
+
+    private static bool TryGetJsonProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
 
     /// <summary>
     /// What a customer is shown about a stand — and, as importantly, what they
