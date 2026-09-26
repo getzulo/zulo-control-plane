@@ -155,6 +155,7 @@ builder.Services.AddScoped<TenantUpgradeService>();
 builder.Services.AddScoped<ImageTreeReader>();
 builder.Services.AddScoped<TenantApiClient>();
 builder.Services.AddScoped<CommercialBooks>();
+builder.Services.AddScoped<BillingLicenceStarter>();
 builder.Services.AddHttpClient(ZuloOne.ControlPlane.Billing.StripeCheckout.HttpClientName, client =>
     client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ZuloOne.ControlPlane.Billing.StripeCheckout>();

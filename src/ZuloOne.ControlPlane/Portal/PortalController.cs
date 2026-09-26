@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -360,7 +359,7 @@ public class PortalController : ControllerBase
         try
         {
             var rows = await _books.ListForStandAsync(tenant.Slug, ct);
-            var invoices = CustomerVisibleInvoices(rows);
+            var invoices = PortalBilling.CustomerVisibleInvoices(rows);
             return Ok(new
             {
                 invoices,
@@ -417,10 +416,10 @@ public class PortalController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
 
-        if (!TryFindIssuedUnpaid(rows, invoiceId, out var amount, out var number, out var currency))
+        if (!PortalBilling.TryFindIssuedUnpaid(rows, invoiceId, out var amount, out var number, out var currency))
             return NotFound(new { error = "No such unpaid issued invoice for this stand." });
 
-        var returnUrl = CabinetStandUrl(tenant.Id);
+        var returnUrl = PortalBilling.CabinetStandUrl(_settings, tenant.Id);
         if (string.IsNullOrWhiteSpace(returnUrl))
             return BadRequest(new { error = "Portal:PublicUrl is not configured." });
 
@@ -883,129 +882,6 @@ public class PortalController : ControllerBase
 
     private string Email() =>
         User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "(unknown)";
-
-    /// <summary>
-    /// Where Stripe returns the customer after Checkout — the cabinet stand page.
-    /// Built from configured <see cref="PortalSettings.PublicUrl"/>, never Host.
-    /// </summary>
-    private string? CabinetStandUrl(Guid tenantId)
-    {
-        var root = (_settings.PublicUrl ?? string.Empty).TrimEnd('/');
-        if (string.IsNullOrWhiteSpace(root)) return null;
-
-        var locale = string.IsNullOrWhiteSpace(_settings.DefaultLocale) ? "en" : _settings.DefaultLocale;
-        // getzulo.com cabinet: /{locale}/cabinet — stand detail is client state today;
-        // returning to the cabinet is enough for the customer to refresh invoices.
-        return $"{root}/{locale}/cabinet?stand={tenantId:D}";
-    }
-
-    private static List<object> CustomerVisibleInvoices(JsonElement rows)
-    {
-        var list = new List<object>();
-        if (rows.ValueKind != JsonValueKind.Array) return list;
-
-        foreach (var row in rows.EnumerateArray())
-        {
-            if (!IsIssuedDocument(row)) continue;
-
-            list.Add(new
-            {
-                id = ReadJsonString(row, "id") ?? "",
-                number = ReadJsonString(row, "number"),
-                standSlug = ReadJsonString(row, "standSlug"),
-                dueDate = ReadJsonString(row, "dueDate"),
-                remaining = ReadJsonDecimal(row, "remaining"),
-                status = ReadJsonString(row, "status") ?? "issued",
-                amount = ReadJsonDecimal(row, "amount"),
-                periodFrom = ReadJsonString(row, "periodFrom"),
-                periodTo = ReadJsonString(row, "periodTo"),
-            });
-        }
-
-        return list;
-    }
-
-    private static bool TryFindIssuedUnpaid(
-        JsonElement rows,
-        string invoiceId,
-        out decimal amount,
-        out string? number,
-        out string currency)
-    {
-        amount = 0m;
-        number = null;
-        currency = "usd";
-        if (rows.ValueKind != JsonValueKind.Array) return false;
-
-        foreach (var row in rows.EnumerateArray())
-        {
-            var id = ReadJsonString(row, "id");
-            if (!string.Equals(id, invoiceId, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!IsIssuedDocument(row)) return false;
-
-            var remaining = ReadJsonDecimal(row, "remaining");
-            var status = ReadJsonString(row, "status");
-            var unpaid = remaining > 0m
-                || string.Equals(status, "issued", StringComparison.OrdinalIgnoreCase);
-            if (!unpaid) return false;
-
-            amount = ReadJsonDecimal(row, "amount");
-            if (amount <= 0m) amount = remaining;
-            number = ReadJsonString(row, "number");
-            var cur = ReadJsonString(row, "currency");
-            if (!string.IsNullOrWhiteSpace(cur)) currency = cur;
-            return amount > 0m;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Draft realizations stay in the commercial ERP. Paid is not a subtype —
-    /// status comes from remaining Receivable while subtype stays Issued.
-    /// </summary>
-    private static bool IsIssuedDocument(JsonElement row)
-    {
-        var subtype = ReadJsonString(row, "subtype");
-        if (string.Equals(subtype, "Draft", StringComparison.OrdinalIgnoreCase))
-            return false;
-        return string.Equals(subtype, "Issued", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string? ReadJsonString(JsonElement element, string name)
-        => TryGetJsonProperty(element, name, out var value) ? value.GetString() : null;
-
-    private static decimal ReadJsonDecimal(JsonElement element, string name)
-    {
-        if (!TryGetJsonProperty(element, name, out var value)) return 0m;
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var n)) return n;
-        return decimal.TryParse(value.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : 0m;
-    }
-
-    private static bool TryGetJsonProperty(JsonElement element, string name, out JsonElement value)
-    {
-        if (element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(name, out value))
-            return true;
-
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in element.EnumerateObject())
-            {
-                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    value = prop.Value;
-                    return true;
-                }
-            }
-        }
-
-        value = default;
-        return false;
-    }
 
     /// <summary>
     /// What a customer is shown about a stand — and, as importantly, what they

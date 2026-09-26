@@ -91,7 +91,8 @@ public sealed class CommercialBooks
 
     /// <summary>
     /// Posts a Stripe <c>CustomerPayment</c>. Body: standSlug, sessionId
-    /// (required). Duplicate sessionId is idempotent in the books.
+    /// (required), optional amount (Checkout charged sum — omit only when the
+    /// books should default to remaining). Duplicate sessionId is idempotent.
     /// </summary>
     public async Task<JsonElement> StripePayAsync(string bodyJson, CancellationToken ct)
         => await PayloadObjectAsync("stripe-pay", bodyJson, ct);

@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Billing;
 using ZuloOne.ControlPlane.Portal;
-using ZuloOne.ControlPlane.Provisioning;
 using ZuloOne.ControlPlane.Registry;
 
 namespace ZuloOne.ControlPlane.Api;
@@ -36,21 +35,18 @@ public sealed class BillingController : ControllerBase
     private readonly ControlPlaneDbContext _db;
     private readonly CommercialBooks _books;
     private readonly BillingConfig _config;
-    private readonly TenantContainerService _containers;
-    private readonly ILogger<BillingController> _logger;
+    private readonly BillingLicenceStarter _licence;
 
     public BillingController(
         ControlPlaneDbContext db,
         CommercialBooks books,
         BillingConfig config,
-        TenantContainerService containers,
-        ILogger<BillingController> logger)
+        BillingLicenceStarter licence)
     {
         _db = db;
         _books = books;
         _config = config;
-        _containers = containers;
-        _logger = logger;
+        _licence = licence;
     }
 
     /// <summary>
@@ -159,45 +155,8 @@ public sealed class BillingController : ControllerBase
             var settled = remaining <= 0m
                 || string.Equals(ReadString(paid, "status"), "paid", StringComparison.OrdinalIgnoreCase);
 
-            var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Slug == standSlug, ct);
-            if (tenant is not null && settled)
-            {
-                var action = BillingLicence.Decide(
-                    tenant.Status,
-                    tenant.StoppedByCustomer,
-                    demo: tenant.Demo != null,
-                    sliceOverdue: false,
-                    sliceSettled: true);
-
-                if (action == BillingLicenceAction.StartPaid)
-                {
-                    if (string.IsNullOrWhiteSpace(tenant.ContainerId))
-                    {
-                        _logger.LogWarning(
-                            "Bank pay settled {Slug} but StartPaid skipped: no container", tenant.Slug);
-                    }
-                    else
-                    {
-                        try
-                        {
-                            await _containers.StartAsync(tenant.ContainerId!, ct);
-                            tenant.Status = TenantStatus.Active;
-                            tenant.LastError = null;
-                            tenant.UpdatedAt = DateTime.UtcNow;
-                            await _db.SaveChangesAsync(ct);
-                            _logger.LogInformation(
-                                "Started paid stand {Slug} after bank pay of invoice {InvoiceId}",
-                                tenant.Slug, id);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex,
-                                "Bank pay settled {Slug} but StartPaid failed; sweep may retry",
-                                tenant.Slug);
-                        }
-                    }
-                }
-            }
+            if (settled)
+                await _licence.TryStartAfterPayAsync(standSlug, $"bank pay of invoice {id}", ct);
 
             return Ok(JsonSerializer.Deserialize<object>(paid.GetRawText()));
         }

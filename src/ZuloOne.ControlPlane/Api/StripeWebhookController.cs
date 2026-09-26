@@ -4,10 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
 using ZuloOne.ControlPlane.Billing;
-using ZuloOne.ControlPlane.Provisioning;
-using ZuloOne.ControlPlane.Registry;
 
 namespace ZuloOne.ControlPlane.Api;
 
@@ -24,23 +21,20 @@ public sealed class StripeWebhookController : ControllerBase
     private readonly StripeCheckout _stripe;
     private readonly CommercialBooks _books;
     private readonly BillingConfig _config;
-    private readonly ControlPlaneDbContext _db;
-    private readonly TenantContainerService _containers;
+    private readonly BillingLicenceStarter _licence;
     private readonly ILogger<StripeWebhookController> _logger;
 
     public StripeWebhookController(
         StripeCheckout stripe,
         CommercialBooks books,
         BillingConfig config,
-        ControlPlaneDbContext db,
-        TenantContainerService containers,
+        BillingLicenceStarter licence,
         ILogger<StripeWebhookController> logger)
     {
         _stripe = stripe;
         _books = books;
         _config = config;
-        _db = db;
-        _containers = containers;
+        _licence = licence;
         _logger = logger;
     }
 
@@ -61,13 +55,14 @@ public sealed class StripeWebhookController : ControllerBase
         var signature = Request.Headers["Stripe-Signature"].ToString();
         if (!_stripe.VerifyWebhook(payload, signature))
         {
-            _logger.LogWarning("Rejected Stripe webhook — bad signature");
-            return Unauthorized(new { error = "Bad Stripe signature." });
+            _logger.LogWarning("Rejected Stripe webhook — bad or stale signature");
+            return BadRequest(new { error = "Bad Stripe signature." });
         }
 
         string? eventType = null;
         string? sessionId = null;
         string? standSlug = null;
+        decimal? chargedAmount = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payload) ? "{}" : payload);
@@ -78,6 +73,7 @@ public sealed class StripeWebhookController : ControllerBase
                 && TryGetProperty(data, "object", out var obj))
             {
                 sessionId = ReadString(obj, "id");
+                chargedAmount = StripeCheckout.ChargedAmount(obj);
                 if (TryGetProperty(obj, "metadata", out var meta))
                     standSlug = ReadString(meta, "standSlug");
             }
@@ -106,14 +102,14 @@ public sealed class StripeWebhookController : ControllerBase
 
         try
         {
-            var body = JsonSerializer.Serialize(new { standSlug, sessionId });
+            var body = StripeCheckout.StripePayBody(standSlug, sessionId, chargedAmount);
             var paid = await _books.StripePayAsync(body, ct);
             var remaining = ReadDecimal(paid, "remaining");
             var settled = remaining <= 0m
                 || string.Equals(ReadString(paid, "status"), "paid", StringComparison.OrdinalIgnoreCase);
 
             if (settled)
-                await TryStartPaidAsync(standSlug, sessionId, ct);
+                await _licence.TryStartAfterPayAsync(standSlug, $"Stripe session {sessionId}", ct);
         }
         catch (Exception ex)
         {
@@ -125,46 +121,6 @@ public sealed class StripeWebhookController : ControllerBase
         }
 
         return Ok(new { received = true });
-    }
-
-    private async Task TryStartPaidAsync(string standSlug, string sessionId, CancellationToken ct)
-    {
-        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Slug == standSlug, ct);
-        if (tenant is null) return;
-
-        var action = BillingLicence.Decide(
-            tenant.Status,
-            tenant.StoppedByCustomer,
-            demo: tenant.Demo != null,
-            sliceOverdue: false,
-            sliceSettled: true);
-
-        if (action != BillingLicenceAction.StartPaid) return;
-
-        if (string.IsNullOrWhiteSpace(tenant.ContainerId))
-        {
-            _logger.LogWarning(
-                "Stripe pay settled {Slug} but StartPaid skipped: no container", tenant.Slug);
-            return;
-        }
-
-        try
-        {
-            await _containers.StartAsync(tenant.ContainerId!, ct);
-            tenant.Status = TenantStatus.Active;
-            tenant.LastError = null;
-            tenant.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
-            _logger.LogInformation(
-                "Started paid stand {Slug} after Stripe session {SessionId}",
-                tenant.Slug, sessionId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Stripe pay settled {Slug} but StartPaid failed; sweep may retry",
-                tenant.Slug);
-        }
     }
 
     private static string? ReadString(JsonElement element, string name)

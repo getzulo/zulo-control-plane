@@ -61,6 +61,7 @@ public sealed class StripeCheckout
             ? "usd"
             : currency.Trim().ToLowerInvariant();
 
+        var amountText = amount.ToString(CultureInfo.InvariantCulture);
         var form = new Dictionary<string, string>
         {
             ["mode"] = "payment",
@@ -69,6 +70,9 @@ public sealed class StripeCheckout
             ["client_reference_id"] = invoiceId,
             ["metadata[invoiceId]"] = invoiceId,
             ["metadata[standSlug]"] = standSlug,
+            // Echoed on checkout.session.completed so stripe-pay posts the same
+            // sum Checkout charged, not the full remaining receivable.
+            ["metadata[amount]"] = amountText,
             ["line_items[0][quantity]"] = "1",
             ["line_items[0][price_data][currency]"] = currencyCode,
             ["line_items[0][price_data][unit_amount]"] = unitAmount.ToString(CultureInfo.InvariantCulture),
@@ -102,11 +106,21 @@ public sealed class StripeCheckout
         return new StripeCheckoutSession(sessionId, url);
     }
 
+    /// <summary>Stripe's default signature tolerance (~5 minutes).</summary>
+    public static readonly TimeSpan DefaultWebhookTolerance = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// Verifies <c>Stripe-Signature</c>: HMAC SHA256 of <c>{t}.{payload}</c>
-    /// with the webhook secret must match one of the <c>v1=</c> values.
+    /// with the webhook secret must match one of the <c>v1=</c> values, and
+    /// <c>t=</c> must be within <paramref name="tolerance"/> of
+    /// <paramref name="utcNow"/> (Stripe skew / replay guard).
     /// </summary>
-    public static bool VerifyWebhook(string payload, string? signatureHeader, string? webhookSecret)
+    public static bool VerifyWebhook(
+        string payload,
+        string? signatureHeader,
+        string? webhookSecret,
+        TimeSpan? tolerance = null,
+        DateTimeOffset? utcNow = null)
     {
         if (string.IsNullOrWhiteSpace(webhookSecret))
             return false;
@@ -130,6 +144,15 @@ public sealed class StripeCheckout
         if (string.IsNullOrWhiteSpace(timestamp) || candidates.Count == 0)
             return false;
 
+        if (!long.TryParse(timestamp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixSeconds))
+            return false;
+
+        var eventTime = DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var maxSkew = tolerance ?? DefaultWebhookTolerance;
+        if (Math.Abs((now - eventTime).TotalSeconds) > maxSkew.TotalSeconds)
+            return false;
+
         var signed = Encoding.UTF8.GetBytes($"{timestamp}.{payload}");
         var keyBytes = Encoding.UTF8.GetBytes(webhookSecret);
         var expected = HMACSHA256.HashData(keyBytes, signed);
@@ -147,6 +170,74 @@ public sealed class StripeCheckout
     /// <summary>Instance wrapper that uses the bound webhook secret.</summary>
     public bool VerifyWebhook(string payload, string? signatureHeader)
         => VerifyWebhook(payload, signatureHeader, _config.StripeWebhookSecret);
+
+    /// <summary>
+    /// Amount Checkout charged, in major currency units. Prefers
+    /// <c>amount_total</c> (Stripe cents); falls back to <c>metadata.amount</c>.
+    /// </summary>
+    public static decimal? ChargedAmount(JsonElement sessionObject)
+    {
+        if (TryGetProperty(sessionObject, "amount_total", out var total))
+        {
+            if (total.ValueKind == JsonValueKind.Number && total.TryGetInt64(out var cents) && cents > 0)
+                return cents / 100m;
+            if (total.ValueKind == JsonValueKind.Number && total.TryGetDecimal(out var decCents) && decCents > 0)
+                return decCents / 100m;
+        }
+
+        if (TryGetProperty(sessionObject, "metadata", out var meta)
+            && TryGetProperty(meta, "amount", out var metaAmount))
+        {
+            if (metaAmount.ValueKind == JsonValueKind.Number && metaAmount.TryGetDecimal(out var n) && n > 0m)
+                return n;
+            if (decimal.TryParse(metaAmount.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed)
+                && parsed > 0m)
+                return parsed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// JSON body for books <c>stripe-pay</c>. When <paramref name="amount"/> is
+    /// set, books must not default to the full remaining receivable.
+    /// </summary>
+    public static string StripePayBody(string standSlug, string sessionId, decimal? amount)
+    {
+        if (amount is > 0m)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                standSlug,
+                sessionId,
+                amount,
+            });
+        }
+
+        return JsonSerializer.Serialize(new { standSlug, sessionId });
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
 
     private static bool FixedTimeEqualsHex(string expectedLowerHex, string presented)
     {
