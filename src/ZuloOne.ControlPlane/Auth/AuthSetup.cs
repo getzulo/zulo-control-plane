@@ -1,7 +1,10 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace ZuloOne.ControlPlane.Auth;
@@ -23,8 +26,10 @@ public static class AuthSetup
     {
         var access = configuration.GetSection("Access").Get<AccessSettings>() ?? new AccessSettings();
         var op = configuration.GetSection("Operator").Get<OperatorSettings>() ?? new OperatorSettings();
+        var directory = configuration.GetSection("Directory").Get<DirectorySettings>() ?? new DirectorySettings();
         services.Configure<AccessSettings>(configuration.GetSection("Access"));
         services.Configure<OperatorSettings>(configuration.GetSection("Operator"));
+        services.Configure<DirectorySettings>(configuration.GetSection("Directory"));
 
         // No default scheme. With one set, HttpContext.User is populated from it on
         // every request whether or not the policy asked for it, which quietly makes
@@ -33,6 +38,95 @@ public static class AuthSetup
 
         auth.AddScheme<AuthenticationSchemeOptions, OperatorSessionHandler>(
             OperatorSessionHandler.SchemeName, _ => { });
+
+        if (directory.IsConfigured)
+        {
+            var development = string.Equals(
+                Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+                "Development",
+                StringComparison.OrdinalIgnoreCase);
+
+            auth.AddCookie(DirectorySettings.CookieScheme, options =>
+            {
+                options.Cookie.Name = development ? "zulo_cp" : "__Host-zulo_cp";
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.Cookie.Path = "/";
+                options.Cookie.SecurePolicy = development
+                    ? CookieSecurePolicy.SameAsRequest
+                    : CookieSecurePolicy.Always;
+                options.ExpireTimeSpan = TimeSpan.FromHours(12);
+                options.SlidingExpiration = true;
+            });
+
+            auth.AddOpenIdConnect(DirectorySettings.ChallengeScheme, options =>
+            {
+                options.SignInScheme = DirectorySettings.CookieScheme;
+                options.Authority = directory.Issuer;
+                options.ClientId = directory.ClientId;
+                options.ClientSecret = directory.ClientSecret;
+                options.CallbackPath = directory.CallbackPath;
+                options.ResponseType = OpenIdConnectResponseType.Code;
+                options.UsePkce = true;
+                options.SaveTokens = false;
+                options.GetClaimsFromUserInfoEndpoint = false;
+                options.MapInboundClaims = false;
+                options.RequireHttpsMetadata = !development;
+                options.Scope.Clear();
+                options.Scope.Add(OpenIdConnectScope.OpenId);
+                options.TokenValidationParameters.NameClaimType = "email";
+                options.TokenValidationParameters.ValidAudience = directory.ClientId;
+                options.TokenValidationParameters.ValidIssuer = directory.Issuer;
+                options.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.RsaSha256];
+                var cookieSecure = development
+                    ? CookieSecurePolicy.SameAsRequest
+                    : CookieSecurePolicy.Always;
+                options.CorrelationCookie.SameSite = SameSiteMode.Lax;
+                options.CorrelationCookie.SecurePolicy = cookieSecure;
+                options.NonceCookie.SameSite = SameSiteMode.Lax;
+                options.NonceCookie.SecurePolicy = cookieSecure;
+                options.Events = new OpenIdConnectEvents
+                {
+                    OnRedirectToIdentityProvider = context =>
+                    {
+                        // Pin to the public panel URL. Behind Cloudflare the Host
+                        // header is usually already cp.zulo.one; if it is not, the
+                        // registered redirect_uri would miss and login.getzulo.com
+                        // would refuse the authorize request.
+                        var panel = directory.PanelUrl?.TrimEnd('/');
+                        if (!string.IsNullOrEmpty(panel))
+                            context.ProtocolMessage.RedirectUri = panel + directory.CallbackPath;
+                        return Task.CompletedTask;
+                    },
+                    OnTokenValidated = context =>
+                    {
+                        var identity = (ClaimsIdentity)context.Principal!.Identity!;
+                        identity.AddClaim(new Claim("zuloone.cp.mode", "directory"));
+                        var email = context.Principal.FindFirst("email")?.Value
+                                    ?? context.Principal.FindFirst(ClaimTypes.Email)?.Value;
+                        if (!string.IsNullOrEmpty(email) && identity.FindFirst("email") is null)
+                            identity.AddClaim(new Claim("email", email));
+                        var picture = context.Principal.FindFirst("picture")?.Value;
+                        if (!string.IsNullOrEmpty(picture) && identity.FindFirst("picture") is null)
+                            identity.AddClaim(new Claim("picture", picture));
+                        var name = context.Principal.FindFirst("name")?.Value;
+                        if (!string.IsNullOrEmpty(name) && identity.FindFirst("name") is null)
+                            identity.AddClaim(new Claim("name", name));
+                        return Task.CompletedTask;
+                    },
+                    OnRemoteFailure = context =>
+                    {
+                        context.HttpContext.RequestServices
+                            .GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("ControlPlane.Directory")
+                            .LogWarning(context.Failure, "OIDC with the directory failed");
+                        context.Response.Redirect("/?directory=failed");
+                        context.HandleResponse();
+                        return Task.CompletedTask;
+                    },
+                };
+            });
+        }
 
         // The customer portal's scheme. Registered so its own endpoints can name
         // it, and — the part that matters — NEVER added to the policies below.
@@ -45,7 +139,7 @@ public static class AuthSetup
         auth.AddScheme<AuthenticationSchemeOptions, Portal.PortalSessionHandler>(
             Portal.PortalSessionHandler.SchemeName, _ => { });
 
-        if (access.IsConfigured)
+        if (access.IsConfigured && !directory.IsConfigured)
         {
             auth.AddJwtBearer(AccessScheme, options =>
             {
@@ -138,7 +232,7 @@ public static class AuthSetup
                 };
             });
         }
-        else
+        else if (!directory.IsConfigured)
         {
             // Refusing to register is the point. A JWT scheme with ValidateAudience
             // against a null audience, or an empty allowlist, is not "not
@@ -148,20 +242,26 @@ public static class AuthSetup
                 "Cloudflare Access is NOT configured (needs Access:TeamDomain, Access:Aud and a non-empty Access:AllowedEmails) — the panel is reachable only through the break-glass path");
         }
 
+        if (directory.IsConfigured && access.IsConfigured)
+            logger.LogWarning(
+                "Directory OIDC is the way into the panel — Access:TeamDomain is ignored. Unset Access:* and delete the Cloudflare Access application for cp.zulo.one");
+
         if (!op.IsConfigured)
             logger.LogWarning(
-                "No break-glass operator configured (Operator:Email + Operator:PasswordHash) — if Cloudflare Access is unavailable there will be no way in");
+                "No break-glass operator configured (Operator:Email + Operator:PasswordHash) — if login.getzulo.com is unavailable there will be no way in");
 
         // BOTH policies, not just the fallback. FallbackPolicy applies only to
         // endpoints carrying no authorization metadata; the moment anything is
         // marked [Authorize] the DefaultPolicy applies instead, and the stock
         // default names no schemes — so it would accept only one of the two ways in,
         // silently, and only on the endpoints someone had bothered to annotate.
-        var schemes = access.IsConfigured
-            ? new[] { AccessScheme, OperatorSessionHandler.SchemeName }
-            : [OperatorSessionHandler.SchemeName];
+        var schemes = new List<string> { OperatorSessionHandler.SchemeName };
+        if (directory.IsConfigured)
+            schemes.Add(DirectorySettings.CookieScheme);
+        else if (access.IsConfigured)
+            schemes.Add(AccessScheme);
 
-        var either = new AuthorizationPolicyBuilder(schemes)
+        var either = new AuthorizationPolicyBuilder([.. schemes])
             .RequireAuthenticatedUser()
             .Build();
 

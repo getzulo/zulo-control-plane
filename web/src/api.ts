@@ -463,10 +463,15 @@ export interface DemoClaim {
 export interface AuthContext {
   authenticated: boolean;
   email: string | null;
+  name?: string | null;
+  picture?: string | null;
+  accountUrl?: string | null;
   /** How this request was authenticated, as the SERVER sees it. */
-  mode: 'access' | 'local' | 'anonymous';
+  mode: 'access' | 'local' | 'directory' | 'anonymous';
   /** True only when this request arrived on the break-glass listener. */
   localLoginAvailable: boolean;
+  /** True on the public listener when login.getzulo.com is the way in. */
+  directoryLoginAvailable: boolean;
   enrolled: boolean;
 }
 
@@ -502,7 +507,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // Cloudflare session expired, and a reload lets the edge re-issue it;
     // redirecting to a local login form there would strand the operator on a page
     // that cannot help them. In break-glass mode the token is simply stale.
-    if (currentMode === 'access') { location.reload(); }
+    if (currentMode === 'directory') { location.assign('/api/auth/directory'); }
+    else if (currentMode === 'access') { location.reload(); }
     else { token.set(null); }
   }
 

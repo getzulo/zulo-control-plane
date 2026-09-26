@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Even the context call failing is information: treat it as anonymous and
       // let the UI say so, rather than rendering a dashboard that cannot load.
       setMode('anonymous');
-      setCtx({ authenticated: false, email: null, mode: 'anonymous', localLoginAvailable: false, enrolled: false });
+      setCtx({ authenticated: false, email: null, mode: 'anonymous', localLoginAvailable: false, directoryLoginAvailable: false, enrolled: false });
     } finally {
       setLoading(false);
     }
@@ -70,10 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [ctx?.mode]);
 
   const signOut = useCallback(async () => {
-    if (ctx?.mode === 'access') {
-      // Directory logout continues to the Access logout, which is the only
-      // request that can drop the panel cookie.
-      window.location.assign('https://login.getzulo.com/logout');
+    if (ctx?.mode === 'directory' || ctx?.mode === 'access') {
+      window.location.assign('/api/auth/signout');
       return;
     }
     if (ctx?.mode === 'local') {

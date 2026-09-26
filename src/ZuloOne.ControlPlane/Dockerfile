@@ -102,7 +102,8 @@ https://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.lis
 # dumps outlive a container recreate — an upgrade's rollback is the snapshot taken
 # just before it, and losing it during the upgrade would be the worst possible
 # moment.
-RUN mkdir -p /var/zuloone/snapshots && chown $APP_UID:$APP_UID /var/zuloone/snapshots
+RUN mkdir -p /var/zuloone/snapshots /home/app/.aspnet/DataProtection-Keys \
+    && chown $APP_UID:$APP_UID /var/zuloone/snapshots /home/app/.aspnet/DataProtection-Keys
 ENV Snapshots__Path=/var/zuloone/snapshots
 
 COPY --from=build /app/publish ./

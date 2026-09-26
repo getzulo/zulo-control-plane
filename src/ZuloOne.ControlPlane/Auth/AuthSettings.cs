@@ -1,7 +1,8 @@
 namespace ZuloOne.ControlPlane.Auth;
 
 /// <summary>
-/// Cloudflare Access — the normal way in, bound from the <c>Access</c> section.
+/// Cloudflare Access — kept as a compile-time scheme for break-glass-era
+/// tests. The public way in is Directory OIDC when that section is set.
 /// </summary>
 public sealed class AccessSettings
 {
@@ -73,4 +74,31 @@ public sealed class OperatorSettings
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(Email) && !string.IsNullOrWhiteSpace(PasswordHash);
+}
+
+/// <summary>
+/// The public way into the panel: OpenID Connect against login.getzulo.com.
+/// Cloudflare Access is not used when this is configured.
+/// </summary>
+public sealed class DirectorySettings
+{
+    public const string CookieScheme = "DirectoryCookie";
+    public const string ChallengeScheme = "Directory";
+
+    /// <summary>e.g. https://login.getzulo.com</summary>
+    public string? Issuer { get; set; }
+
+    public string? ClientId { get; set; }
+
+    public string? ClientSecret { get; set; }
+
+    public string CallbackPath { get; set; } = "/signin-oidc";
+
+    /// <summary>Where the browser reaches the panel, e.g. https://cp.zulo.one</summary>
+    public string? PanelUrl { get; set; }
+
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(Issuer)
+        && !string.IsNullOrWhiteSpace(ClientId)
+        && !string.IsNullOrWhiteSpace(ClientSecret);
 }

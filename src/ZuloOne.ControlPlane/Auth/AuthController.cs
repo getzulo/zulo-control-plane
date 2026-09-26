@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -23,12 +24,18 @@ public class AuthController : ControllerBase
 {
     private readonly ControlPlaneDbContext _db;
     private readonly OperatorSettings _settings;
+    private readonly DirectorySettings _directory;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(ControlPlaneDbContext db, IOptions<OperatorSettings> settings, ILogger<AuthController> logger)
+    public AuthController(
+        ControlPlaneDbContext db,
+        IOptions<OperatorSettings> settings,
+        IOptions<DirectorySettings> directory,
+        ILogger<AuthController> logger)
     {
         _db = db;
         _settings = settings.Value;
+        _directory = directory.Value;
         _logger = logger;
     }
 
@@ -52,15 +59,47 @@ public class AuthController : ControllerBase
         var account = await _db.OperatorAccounts.AsNoTracking().FirstOrDefaultAsync();
         var mode = User.FindFirst("zuloone.cp.mode")?.Value;
 
+        var email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                    ?? User.FindFirst("email")?.Value;
+        var issuer = (_directory.Issuer ?? "https://login.getzulo.com").TrimEnd('/');
         return Ok(new
         {
             authenticated = User.Identity?.IsAuthenticated == true,
-            email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
-                    ?? User.FindFirst("email")?.Value,
+            email,
+            name = User.FindFirst("name")?.Value ?? email,
+            picture = User.FindFirst("picture")?.Value,
+            accountUrl = issuer + "/account",
             mode = mode ?? "anonymous",
             localLoginAvailable = OnBreakGlassPort() && account is not null,
+            directoryLoginAvailable = _directory.IsConfigured && !OnBreakGlassPort(),
             enrolled = account?.TotpSecret is not null,
         });
+    }
+
+    /// <summary>
+    /// Starts OpenID Connect against login.getzulo.com. The public listener
+    /// has no password form — that lives on the directory host.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("directory")]
+    public IActionResult Directory()
+    {
+        if (!_directory.IsConfigured || OnBreakGlassPort()) return NotFound();
+        return Challenge(
+            new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = "/" },
+            DirectorySettings.ChallengeScheme);
+    }
+
+    /// <summary>Drops the panel cookie, then the directory session.</summary>
+    [AllowAnonymous]
+    [HttpGet("signout")]
+    public async Task<IActionResult> DirectorySignOut()
+    {
+        if (_directory.IsConfigured)
+            await HttpContext.SignOutAsync(DirectorySettings.CookieScheme);
+        var panel = string.IsNullOrWhiteSpace(_directory.PanelUrl) ? "/" : _directory.PanelUrl.TrimEnd('/') + "/";
+        var issuer = (_directory.Issuer ?? "https://login.getzulo.com").TrimEnd('/');
+        return Redirect($"{issuer}/logout?continue={Uri.EscapeDataString(panel)}");
     }
 
     [AllowAnonymous]

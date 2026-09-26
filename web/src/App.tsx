@@ -73,10 +73,22 @@ export default function App() {
           <Group gap="xs">
             {/* Which door you came through matters when something is wrong: over the
                 tunnel Cloudflare is bypassed entirely, and that is worth seeing. */}
-            {auth.ctx && (
-              <Text size="xs" c="dimmed">
-                {auth.ctx.email ?? 'signed in'} · {auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}
-              </Text>
+            {auth.ctx && auth.ctx.authenticated && (
+              <a
+                className="zulo-person"
+                href={auth.ctx.accountUrl ?? 'https://login.getzulo.com/account'}
+              >
+                {auth.ctx.picture
+                  ? <img className="zulo-person-mark" src={auth.ctx.picture} alt="" />
+                  : <span className="zulo-person-mark" aria-hidden />}
+                <span className="zulo-person-text">
+                  <strong>{auth.ctx.name ?? auth.ctx.email ?? 'signed in'}</strong>
+                  <em>{auth.ctx.email} · {auth.ctx.mode === 'directory' ? 'directory' : auth.ctx.mode === 'access' ? 'Cloudflare Access' : 'break-glass'}</em>
+                </span>
+              </a>
+            )}
+            {auth.ctx && !auth.ctx.authenticated && (
+              <Text size="xs" c="dimmed">not signed in</Text>
             )}
             <RefreshButton />
             <ColorSchemeToggle />

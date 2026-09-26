@@ -1,4 +1,5 @@
 ﻿using Docker.DotNet;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -17,12 +18,19 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// Two ways in, both cryptographically verified, either sufficient: Cloudflare
-// Access for the normal path and a break-glass operator for when Cloudflare is
-// what is broken. See Auth/AuthSetup.cs.
+// Two ways in, both cryptographically verified, either sufficient: OpenID
+// Connect against login.getzulo.com for the normal path and a break-glass
+// operator for when the directory is what is broken. See Auth/AuthSetup.cs.
 builder.Services.AddControlPlaneAuth(
     builder.Configuration,
     LoggerFactory.Create(b => b.AddConsole()).CreateLogger("ControlPlane.Auth"));
+
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo("/home/app/.aspnet/DataProtection-Keys"))
+        .SetApplicationName("ZuloOne.ControlPlane");
+}
 
 // Protects bcrypt from being used as a CPU sink. It is NOT the security control —
 // the per-account lockout is, because it cannot be sidestepped by rotating source

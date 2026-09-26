@@ -115,6 +115,40 @@ public sealed class PortalAuthPolicyTests
     /// that the named-policy workaround can be revisited, rather than a mystery.
     /// </remarks>
     [Fact]
+    public async Task Directory_oidc_replaces_access_on_the_operator_policy()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["Directory:Issuer"] = "https://login.example.com",
+            ["Directory:ClientId"] = "controlplane",
+            ["Directory:ClientSecret"] = "secret",
+            ["Access:TeamDomain"] = "https://example.cloudflareaccess.com",
+            ["Access:Aud"] = "aud-value",
+            ["Access:AllowedEmails:0"] = "operator@example.com",
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddControlPlaneAuth(configuration, NullLogger.Instance);
+        using var provider = services.BuildServiceProvider();
+        var policy = await provider.GetRequiredService<IAuthorizationPolicyProvider>().GetDefaultPolicyAsync();
+
+        Assert.Contains(OperatorSessionHandler.SchemeName, policy.AuthenticationSchemes);
+        Assert.Contains(DirectorySettings.CookieScheme, policy.AuthenticationSchemes);
+        Assert.DoesNotContain(AuthSetup.AccessScheme, policy.AuthenticationSchemes);
+        Assert.DoesNotContain(PortalSessionHandler.SchemeName, policy.AuthenticationSchemes);
+    }
+
+    /// <summary>
+    /// The regression itself, stated as a test: this is what the attribute form
+    /// produces, and it is why the code uses a named policy instead.
+    /// </summary>
+    /// <remarks>
+    /// Asserting the BROKEN behaviour on purpose. If a future version of ASP.NET
+    /// stops unioning scheme lists, this fails — and the failure is the signal
+    /// that the named-policy workaround can be revisited, rather than a mystery.
+    /// </remarks>
+    [Fact]
     public async Task Naming_only_schemes_would_have_leaked_the_operator_schemes()
     {
         using var provider = Build(withCloudflareAccess: true);

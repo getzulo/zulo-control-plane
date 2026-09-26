@@ -1,10 +1,11 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { Center, Loader, MantineProvider, Stack, Text } from '@mantine/core';
+import { Button, Center, Loader, MantineProvider, Stack, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { theme } from './theme';
 import './theme.css';
+import './person.css';
 import App from './App.tsx';
 import { Login } from './Login.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
@@ -32,25 +33,47 @@ function Root() {
 
   if (ctx.localLoginAvailable) return <Login enrolled={ctx.enrolled} />;
 
-  // Not authenticated and no local login on this listener. Behind Cloudflare that
-  // means the Access session is gone, and only Cloudflare can issue a new one —
-  // there is deliberately no password form on the public listener to fall back to.
+  if (ctx.directoryLoginAvailable) return <DirectoryRedirect />;
+
   return (
     <Center h="100vh">
       <Stack align="center" gap="xs" maw={420}>
         <Text fw={600}>Not signed in</Text>
         <Text size="sm" c="dimmed" ta="center">
-          This panel is reached through Cloudflare Access. If you are seeing this,
-          the Access session has expired or is not configured — reload to let
-          Cloudflare re-issue it.
-        </Text>
-        <Text size="xs" c="dimmed" ta="center">
-          For break-glass access when Cloudflare is unavailable, tunnel to the
-          control plane host and use the loopback listener.
+          Open the panel from the public address, or tunnel to the break-glass
+          listener if login.getzulo.com is down.
         </Text>
       </Stack>
     </Center>
   );
+}
+
+function DirectoryRedirect() {
+  const failed = new URLSearchParams(window.location.search).get('directory') === 'failed';
+
+  useEffect(() => {
+    if (failed) return;
+    window.location.assign('/api/auth/directory');
+  }, [failed]);
+
+  if (failed) {
+    return (
+      <Center h="100vh">
+        <Stack align="center" gap="sm" maw={420} p="md">
+          <Text fw={600}>Could not sign in</Text>
+          <Text size="sm" c="dimmed" ta="center">
+            login.getzulo.com did not complete the sign-in. Try again, or tunnel
+            to the break-glass listener if the directory is down.
+          </Text>
+          <Button onClick={() => window.location.assign('/api/auth/directory')}>
+            Try again
+          </Button>
+        </Stack>
+      </Center>
+    );
+  }
+
+  return <Center h="100vh"><Loader /></Center>;
 }
 
 createRoot(document.getElementById('root')!).render(
