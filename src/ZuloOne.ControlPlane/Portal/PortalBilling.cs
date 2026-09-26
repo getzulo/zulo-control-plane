@@ -54,8 +54,21 @@ public static class PortalBilling
     }
 
     /// <summary>
-    /// Finds one Issued unpaid invoice for Checkout. Amount prefers document
-    /// <c>amount</c>, then remaining receivable.
+    /// Amount Stripe Checkout should bill: the books receivable slice when
+    /// <paramref name="remaining"/> is positive, otherwise the invoice total.
+    /// Returns null when nothing is left to pay (<c>remaining &lt;= 0</c>).
+    /// </summary>
+    public static decimal? CheckoutChargeAmount(decimal remaining, decimal invoiceAmount)
+    {
+        if (remaining <= 0m)
+            return null;
+        return remaining > 0m ? remaining : invoiceAmount > 0m ? invoiceAmount : null;
+    }
+
+    /// <summary>
+    /// Finds one Issued unpaid invoice for Checkout. Charges
+    /// <see cref="CheckoutChargeAmount"/> (remaining receivable), not the
+    /// original invoice total after a partial bank payment.
     /// </summary>
     public static bool TryFindIssuedUnpaid(
         JsonElement rows,
@@ -77,17 +90,14 @@ public static class PortalBilling
             if (!IsIssuedDocument(row)) return false;
 
             var remaining = ReadDecimal(row, "remaining");
-            var status = ReadString(row, "status");
-            var unpaid = remaining > 0m
-                || string.Equals(status, "issued", StringComparison.OrdinalIgnoreCase);
-            if (!unpaid) return false;
+            var charge = CheckoutChargeAmount(remaining, ReadDecimal(row, "amount"));
+            if (charge is not > 0m) return false;
 
-            amount = ReadDecimal(row, "amount");
-            if (amount <= 0m) amount = remaining;
+            amount = charge.Value;
             number = ReadString(row, "number");
             var cur = ReadString(row, "currency");
             if (!string.IsNullOrWhiteSpace(cur)) currency = cur;
-            return amount > 0m;
+            return true;
         }
 
         return false;
