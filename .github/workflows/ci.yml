@@ -98,7 +98,7 @@ jobs:
       - name: Clean up test PostgreSQL
         if: always()
         shell: bash
-        run: docker rm -f "${{ steps.test-pg.outputs.container }}" 2>/dev/null || true
+        run: docker rm -fv "${{ steps.test-pg.outputs.container }}" 2>/dev/null || true
 
       # Non-blocking on purpose. .NET 9+ enables NuGet Audit by default, and a
       # third party's advisory landing overnight must not become our outage.
@@ -324,7 +324,7 @@ jobs:
 
           # Again WITH a token, so the WRITE path is exercised rather than being
           # short-circuited by the 503 above — that write is where the bug was.
-          docker rm -f "$SMOKE_CP" >/dev/null
+          docker rm -fv "$SMOKE_CP" >/dev/null
           docker run -d --name "$SMOKE_CP" --network "$SMOKE_NET" \
             -e "ConnectionStrings__ControlPlane=Host=${SMOKE_PG};Database=cp;Username=postgres;Password=smoke" \
             -e "Patroni__ReportToken=smoke-token" \
@@ -487,8 +487,9 @@ jobs:
           SMOKE_PG: cp-pg-${{ github.run_id }}
           SMOKE_CP: cp-app-${{ github.run_id }}
         run: |
-          docker rm -f "${SMOKE_CP:-}" "${SMOKE_PG:-}" 2>/dev/null || true
+          docker rm -fv "${SMOKE_CP:-}" "${SMOKE_PG:-}" 2>/dev/null || true
           docker network rm "${SMOKE_NET:-}" 2>/dev/null || true
           # Layers accumulate monotonically on a persistent runner; dangling
           # images are the part that is always safe to drop.
           docker image prune -f >/dev/null 2>&1 || true
+          docker volume prune -f >/dev/null 2>&1 || true
