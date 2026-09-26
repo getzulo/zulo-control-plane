@@ -85,15 +85,24 @@ export function BillingPage() {
       setError('Amount must be a positive number.');
       return;
     }
-    await action('issue', () => api.issueInvoice({
-      tenantId: issueTenantId,
-      amount: n,
-      currency: currency.trim() || 'USD',
-      periodFrom,
-      periodTo,
-      dueDate,
-    }));
-    setIssueOpen(false);
+    setBusy('issue');
+    setError(null);
+    try {
+      await api.issueInvoice({
+        tenantId: issueTenantId,
+        amount: n,
+        currency: currency.trim() || 'USD',
+        periodFrom,
+        periodTo,
+        dueDate,
+      });
+      setIssueOpen(false);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
   };
 
   if (!loaded && !error && !booksDown) {

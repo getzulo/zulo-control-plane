@@ -178,14 +178,23 @@ public sealed class BillingController : ControllerBase
                     }
                     else
                     {
-                        await _containers.StartAsync(tenant.ContainerId!, ct);
-                        tenant.Status = TenantStatus.Active;
-                        tenant.LastError = null;
-                        tenant.UpdatedAt = DateTime.UtcNow;
-                        await _db.SaveChangesAsync(ct);
-                        _logger.LogInformation(
-                            "Started paid stand {Slug} after bank pay of invoice {InvoiceId}",
-                            tenant.Slug, id);
+                        try
+                        {
+                            await _containers.StartAsync(tenant.ContainerId!, ct);
+                            tenant.Status = TenantStatus.Active;
+                            tenant.LastError = null;
+                            tenant.UpdatedAt = DateTime.UtcNow;
+                            await _db.SaveChangesAsync(ct);
+                            _logger.LogInformation(
+                                "Started paid stand {Slug} after bank pay of invoice {InvoiceId}",
+                                tenant.Slug, id);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Bank pay settled {Slug} but StartPaid failed; sweep may retry",
+                                tenant.Slug);
+                        }
                     }
                 }
             }
