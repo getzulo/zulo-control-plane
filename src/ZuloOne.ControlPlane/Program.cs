@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
 using ZuloOne.ControlPlane;
 using ZuloOne.ControlPlane.Auth;
+using ZuloOne.ControlPlane.Billing;
 using ZuloOne.ControlPlane.Infra;
 using ZuloOne.ControlPlane.Jobs;
 using ZuloOne.ControlPlane.Provisioning;
@@ -97,6 +98,8 @@ builder.Services.Configure<DemoSettings>(builder.Configuration.GetSection("Demo"
 // Same split as FleetConfig: policy from the settings store so the panel can
 // change it, the one credential bound at startup from cp.env.
 builder.Services.AddSingleton<DemoConfig>();
+builder.Services.Configure<BillingSettings>(builder.Configuration.GetSection("Billing"));
+builder.Services.AddSingleton<BillingConfig>();
 builder.Services.Configure<TenantDatabaseSettings>(builder.Configuration.GetSection("TenantDatabase"));
 builder.Services.Configure<TenantLogSettings>(builder.Configuration.GetSection("TenantLogs"));
 builder.Services.AddMemoryCache();
@@ -136,6 +139,7 @@ builder.Services.AddScoped<RegistryModelCatalog>();
 builder.Services.AddScoped<TenantUpgradeService>();
 builder.Services.AddScoped<ImageTreeReader>();
 builder.Services.AddScoped<TenantApiClient>();
+builder.Services.AddScoped<CommercialBooks>();
 builder.Services.AddScoped<TenantAdminService>();
 builder.Services.AddScoped<TenantInviteService>();
 builder.Services.AddScoped<TenantProvisioner>();

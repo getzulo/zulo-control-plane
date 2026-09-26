@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -178,6 +179,49 @@ public sealed class TenantApiClient
         }
     }
 
+    /// <summary>
+    /// Posts JSON to a designed web service at <c>/api/rest/{serviceName}</c>.
+    /// </summary>
+    /// <remarks>
+    /// The factory client's 15s default is often too short for Issue; pass
+    /// <paramref name="timeout"/> so both the HttpClient and a linked
+    /// cancellation token honour the caller's budget.
+    /// </remarks>
+    public async Task<(int Status, string Body)> PostRestAsync(
+        Tenant tenant, string serviceName, object body, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tenant.JwtSigningKey))
+        {
+            return (0, "The registry holds no signing key for this tenant, so the panel cannot authenticate to it.");
+        }
+
+        var host = _containers.HostFor(tenant.Slug);
+        var url = $"https://{host}/api/rest/{serviceName}";
+
+        using var client = _http.CreateClient("tenant");
+        client.Timeout = timeout;
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(timeout);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(body),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintToken(tenant));
+
+        try
+        {
+            using var response = await client.SendAsync(request, linked.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(linked.Token));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "POST /api/rest/{Service} on {Slug} failed.", serviceName, tenant.Slug);
+            return (0, $"Could not reach {host}: {ex.Message}");
+        }
+    }
+
     /// <summary>What the tenant reported back from a cascade delete.</summary>
     public sealed record TenantDeleteModelResult(
         bool Succeeded,
@@ -340,7 +384,11 @@ public sealed class TenantApiClient
         }
     }
 
-    private static string MintToken(Tenant tenant)
+    /// <summary>
+    /// Signs an Administrator JWT the tenant will accept. Shared with callers
+    /// that reuse this client rather than duplicating the signing recipe.
+    /// </summary>
+    internal static string MintToken(Tenant tenant)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(tenant.JwtSigningKey!));
         var token = new JwtSecurityToken(

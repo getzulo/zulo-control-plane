@@ -96,6 +96,10 @@ public sealed record SettingDef(
 /// could one day reach.
 /// </item>
 /// <item>
+/// <c>Billing:StripeSecretKey</c> / <c>Billing:StripeWebhookSecret</c> — Stripe
+/// credentials that open the card till. Same reasoning as <c>Demo:RequestToken</c>.
+/// </item>
+/// <item>
 /// <c>Mail:Password</c> — the panel has no data-protection key ring, so an
 /// encrypted secret would mean new infrastructure with a new way to fail (lose
 /// the ring, lose the value), and a plaintext one would ride into every dump and
@@ -110,6 +114,7 @@ public static class SettingsCatalog
     public const string Monitoring = "Monitoring thresholds";
     public const string Mail = "Mail";
     public const string Demo = "Demo workspaces";
+    public const string Billing = "Billing";
 
     public static readonly IReadOnlyList<SettingDef> All =
     [
@@ -347,6 +352,31 @@ public static class SettingsCatalog
             + "and again when it is claimed. Twice, so the value handed over existed nowhere "
             + "before — not in the dump, and not while the workspace sat in the pool.",
             SettingKind.Text, "demo"),
+
+        // ------------------------------------------------------------ Billing
+        new("Billing:Enabled", Billing,
+            "Billing",
+            "Master switch. Off means the sweep idles and the Billing panel refuses rather than "
+            + "half-running against an unconfigured commercial stand.",
+            SettingKind.Bool, "false"),
+
+        new("Billing:TenantSlug", Billing,
+            "Commercial tenant",
+            "The fleet stand that holds customers, contracts, invoices and payments for hosting. "
+            + "Not a customer workspace — Zulo's own books. Must be Active or every Billing call "
+            + "answers that the commercial tenant is down.",
+            SettingKind.Text, "hq"),
+
+        new("Billing:BankDetails", Billing,
+            "Bank transfer details",
+            "Shown to the customer when they pay by bank. Leave empty if only card pay is offered.",
+            SettingKind.Text, ""),
+
+        new("Billing:SweepIntervalSeconds", Billing,
+            "Check for overdue every",
+            "How often the sweep asks the commercial tenant who is overdue and who is settled, "
+            + "then Stops or Starts the matching stands.",
+            SettingKind.Seconds, "60", Min: 15, Max: 3600),
 
         new("Mail:Host", Mail, "SMTP host", "Leave empty to disable sending entirely.", SettingKind.Text, ""),
         new("Mail:Port", Mail, "SMTP port", "587 for STARTTLS, 465 for implicit TLS.", SettingKind.Int, "587", Min: 1, Max: 65535),

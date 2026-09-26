@@ -59,8 +59,10 @@ public static class ReservedSlugs
         "privacy", "terms", "pricing", "shop", "store", "partners", "partner",
 
         // Anything that could be mistaken for authentication or money.
+        // "hq" is the commercial stand that holds the books; "billing" stays
+        // reserved so a customer cannot impersonate the money path by name.
         "login", "logout", "signin", "signup", "register", "auth", "oauth", "sso",
-        "id", "identity", "account", "accounts", "profile", "billing", "invoice",
+        "id", "identity", "account", "accounts", "profile", "billing", "hq", "invoice",
         "invoices", "payment", "payments", "checkout", "subscribe", "subscription",
         "secure", "security", "verify", "verification", "token", "session",
 

@@ -8,6 +8,43 @@ public sealed class SettingsCatalogTests
     private static SettingDef[] Demo =>
         SettingsCatalog.All.Where(d => d.Group == SettingsCatalog.Demo).ToArray();
 
+    private static SettingDef[] Billing =>
+        SettingsCatalog.All.Where(d => d.Group == SettingsCatalog.Billing).ToArray();
+
+    [Fact]
+    public void Billing_group_declares_the_four_keys()
+    {
+        string[] expected =
+        [
+            "Billing:Enabled",
+            "Billing:TenantSlug",
+            "Billing:BankDetails",
+            "Billing:SweepIntervalSeconds",
+        ];
+
+        Assert.Equal(expected.Order(), Billing.Select(d => d.Key).Order());
+    }
+
+    /// <summary>
+    /// Stripe credentials open a payment path and must stay in cp.env, never on
+    /// a screen an operator (or a future public surface) could reach.
+    /// </summary>
+    [Fact]
+    public void Billing_Stripe_secrets_are_NOT_in_the_catalogue()
+    {
+        Assert.DoesNotContain(SettingsCatalog.All, d => d.Key == "Billing:StripeSecretKey");
+        Assert.DoesNotContain(SettingsCatalog.All, d => d.Key == "Billing:StripeWebhookSecret");
+        Assert.DoesNotContain(
+            SettingsCatalog.All,
+            d => d.Key.Contains("Stripe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Billing_policy_is_runtime_editable()
+    {
+        Assert.All(Billing, d => Assert.True(d.RuntimeEditable, $"{d.Key} is not runtime-editable"));
+    }
+
     [Fact]
     public void Demo_group_declares_the_policy_knobs()
     {
