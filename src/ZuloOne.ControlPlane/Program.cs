@@ -180,6 +180,7 @@ builder.Services.AddSingleton<NodePruneGate>();
 builder.Services.AddScoped<IJobHandler, BackupJobHandler>();
 builder.Services.AddHostedService<JobWorker>();
 builder.Services.AddHostedService<DemoPoolService>();
+builder.Services.AddHostedService<BillingSweepService>();
 // Only ENQUEUES: a registry dump, then a prune. Both run through the queue, so
 // they inherit the one-at-a-time execution that keeps a delete away from a dump
 // being written or a restore reading one.

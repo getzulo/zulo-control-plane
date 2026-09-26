@@ -402,11 +402,15 @@ public class TenantsController : ControllerBase
         }
     }
 
-    [HttpPost("{id:guid}/stop")]    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>
+    [HttpPost("{id:guid}/stop")]
+    public Task<IActionResult> Stop(Guid id, CancellationToken ct) => Lifecycle(id, ct, async tenant =>
     {
         await _containers.StopAsync(tenant.ContainerId!, ct);
         tenant.Status = TenantStatus.Suspended;
         tenant.Health = TenantHealth.Down;
+        // Operator / unpaid-sweep Stop — never customer Stop. Leave the flag
+        // false so a later pay can StartPaid; do not set it true.
+        tenant.StoppedByCustomer = false;
     });
 
     [HttpPost("{id:guid}/start")]

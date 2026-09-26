@@ -57,4 +57,77 @@ public sealed class CommercialBooks
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
         return doc.RootElement.Clone();
     }
+
+    /// <summary>
+    /// Issued realizations past due with remaining receivable — JSON array of
+    /// <c>{ standSlug, invoiceId, number, dueDate, remaining }</c>.
+    /// </summary>
+    public async Task<JsonElement> OverdueAsync(CancellationToken ct)
+        => await PayloadArrayAsync("overdue", bodyJson: null, ct);
+
+    /// <summary>
+    /// Realizations for one stand slug — JSON array; each row carries
+    /// <c>status</c> (<c>issued</c>/<c>paid</c>) and <c>remaining</c>.
+    /// </summary>
+    public async Task<JsonElement> ListForStandAsync(string standSlug, CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new { standSlug });
+        return await PayloadArrayAsync("list", body, ct);
+    }
+
+    private async Task<JsonElement> PayloadArrayAsync(string action, string? bodyJson, CancellationToken ct)
+    {
+        var root = await CallAsync(action, bodyJson, ct);
+        if (TryGetProperty(root, "Ok", out var ok) && ok.ValueKind == JsonValueKind.False)
+        {
+            var err = TryGetProperty(root, "Error", out var e) ? e.GetString() : null;
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(err) ? $"{ServiceName} {action} failed." : err);
+        }
+
+        if (!TryGetProperty(root, "Payload", out var payloadProp))
+            return ParseArray("[]");
+
+        var payloadText = payloadProp.ValueKind == JsonValueKind.String
+            ? payloadProp.GetString() ?? "[]"
+            : payloadProp.GetRawText();
+
+        if (payloadText.Contains("\"error\"", StringComparison.OrdinalIgnoreCase)
+            && payloadText.TrimStart().StartsWith('{'))
+        {
+            using var errDoc = JsonDocument.Parse(payloadText);
+            if (TryGetProperty(errDoc.RootElement, "error", out var err))
+                throw new InvalidOperationException(err.GetString() ?? $"{ServiceName} {action} failed.");
+        }
+
+        return ParseArray(payloadText);
+    }
+
+    private static JsonElement ParseArray(string json)
+    {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "[]" : json);
+        return doc.RootElement.Clone();
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
 }
