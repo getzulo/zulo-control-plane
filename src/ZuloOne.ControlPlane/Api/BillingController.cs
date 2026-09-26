@@ -58,6 +58,9 @@ public sealed class BillingController : ControllerBase
         [FromQuery] string? standSlug = null,
         CancellationToken ct = default)
     {
+        if (!_config.Enabled)
+            return BillingDisabled();
+
         try
         {
             if (string.IsNullOrWhiteSpace(_config.TenantSlug))
@@ -88,6 +91,9 @@ public sealed class BillingController : ControllerBase
     [HttpPost("invoices")]
     public async Task<IActionResult> Issue([FromBody] IssueInvoiceRequest request, CancellationToken ct)
     {
+        if (!_config.Enabled)
+            return BillingDisabled();
+
         if (request.Amount <= 0)
             return BadRequest(new { error = "amount must be a positive number." });
 
@@ -134,6 +140,9 @@ public sealed class BillingController : ControllerBase
     [HttpPost("invoices/{id}/bank-pay")]
     public async Task<IActionResult> BankPay(string id, [FromBody] BankPayRequest? request, CancellationToken ct)
     {
+        if (!_config.Enabled)
+            return BillingDisabled();
+
         if (string.IsNullOrWhiteSpace(id))
             return BadRequest(new { error = "invoice id is required." });
 
@@ -202,6 +211,7 @@ public sealed class BillingController : ControllerBase
                 remaining = ReadDecimal(row, "remaining"),
                 status = "issued",
                 amount = (decimal?)null,
+                currency = ReadString(row, "currency"),
                 periodFrom = (string?)null,
                 periodTo = (string?)null,
             });
@@ -226,6 +236,7 @@ public sealed class BillingController : ControllerBase
                 remaining = ReadDecimal(row, "remaining"),
                 status = ReadString(row, "status") ?? "issued",
                 amount = ReadDecimal(row, "amount"),
+                currency = ReadString(row, "currency"),
                 periodFrom = ReadString(row, "periodFrom"),
                 periodTo = ReadString(row, "periodTo"),
                 subtype = ReadString(row, "subtype"),
@@ -240,6 +251,9 @@ public sealed class BillingController : ControllerBase
 
     private ObjectResult BooksDown(string message)
         => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = message });
+
+    private BadRequestObjectResult BillingDisabled()
+        => BadRequest(new { error = "Billing is disabled." });
 
     private static string? ReadString(JsonElement element, string name)
         => TryGetProperty(element, name, out var value) ? value.GetString() : null;

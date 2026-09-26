@@ -57,9 +57,10 @@ public sealed class StripeCheckout
         if (unitAmount < 1)
             throw new InvalidOperationException("Invoice amount is too small for card payment.");
 
-        var currencyCode = string.IsNullOrWhiteSpace(currency)
-            ? "usd"
-            : currency.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(currency))
+            throw new InvalidOperationException("Invoice currency is required.");
+
+        var currencyCode = currency.Trim().ToLowerInvariant();
 
         var amountText = amount.ToString(CultureInfo.InvariantCulture);
         var form = new Dictionary<string, string>

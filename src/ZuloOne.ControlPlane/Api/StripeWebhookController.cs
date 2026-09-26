@@ -94,6 +94,16 @@ public sealed class StripeWebhookController : ControllerBase
             return Ok(new { received = true });
         }
 
+        if (!_config.Enabled)
+        {
+            // Kill switch: acknowledge so Stripe stops retrying, but do not
+            // post stripe-pay or Start while billing is off.
+            _logger.LogInformation(
+                "Stripe pay skipped — Billing:Enabled is false (session {SessionId})",
+                sessionId);
+            return Ok(new { received = true, skipped = "billing-disabled" });
+        }
+
         if (string.IsNullOrWhiteSpace(_config.TenantSlug))
         {
             _logger.LogWarning("Stripe pay skipped — Billing:TenantSlug is empty");

@@ -275,6 +275,8 @@ public class PortalController : ControllerBase
     /// sets when a subscription is not settled; without this check, "start" would
     /// be a button that un-suspends an unpaid stand, and the licence gate in
     /// <see cref="PlanCatalog"/> would be one click deep.
+    /// Also refuses while the commercial books still list the stand as overdue —
+    /// customer Stop while Active+overdue must not bypass settle-to-Start.
     /// </remarks>
     [HttpPost("{id:guid}/start")]
     public async Task<IActionResult> Start(Guid id, CancellationToken ct)
@@ -293,6 +295,30 @@ public class PortalController : ControllerBase
         {
             return Forbid403(
                 "This stand was suspended by us, not from here. Settling the subscription is what brings it back.");
+        }
+
+        // Customer Stop while overdue still leaves StoppedByCustomer=true; refuse
+        // Start until the books say the receivable slice is not past due.
+        if (!string.IsNullOrWhiteSpace(_billing.TenantSlug))
+        {
+            try
+            {
+                var overdue = await _books.OverdueAsync(ct);
+                if (PortalBilling.StandAppearsOnOverdue(overdue, tenant.Slug))
+                {
+                    return Forbid403(
+                        "This stand has an overdue balance. Settling the subscription is what brings it back.");
+                }
+            }
+            catch (Exception ex) when (
+                ex.Message.Contains("The commercial tenant is down.", StringComparison.Ordinal)
+                || ex is InvalidOperationException)
+            {
+                // Fail closed: do not Start when the books cannot confirm settlement.
+                _logger.LogWarning(ex, "Portal start refused for {Slug}: books unavailable", tenant.Slug);
+                return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { error = "Billing is temporarily unavailable. Settling the subscription cannot be confirmed." });
+            }
         }
 
         if (string.IsNullOrWhiteSpace(tenant.ContainerId))
@@ -390,6 +416,9 @@ public class PortalController : ControllerBase
 
         if (found.Role != MembershipRole.Owner)
             return Forbid403("Only the stand's owner can pay by card.");
+
+        if (!_billing.Enabled)
+            return BadRequest(new { error = "Billing is disabled." });
 
         if (!_stripe.IsConfigured)
             return BadRequest(new { error = "Card payments are not configured." });

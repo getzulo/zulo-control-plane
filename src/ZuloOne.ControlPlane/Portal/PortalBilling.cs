@@ -45,6 +45,7 @@ public static class PortalBilling
                 remaining = ReadDecimal(row, "remaining"),
                 status = ReadString(row, "status") ?? "issued",
                 amount = ReadDecimal(row, "amount"),
+                currency = ReadString(row, "currency"),
                 periodFrom = ReadString(row, "periodFrom"),
                 periodTo = ReadString(row, "periodTo"),
             });
@@ -66,9 +67,29 @@ public static class PortalBilling
     }
 
     /// <summary>
+    /// True when the overdue array from the books still lists this stand.
+    /// Used by cabinet Start — refuse while receivable is past due.
+    /// </summary>
+    public static bool StandAppearsOnOverdue(JsonElement overdueRows, string standSlug)
+    {
+        if (string.IsNullOrWhiteSpace(standSlug)) return false;
+        if (overdueRows.ValueKind != JsonValueKind.Array) return false;
+
+        foreach (var row in overdueRows.EnumerateArray())
+        {
+            var slug = ReadString(row, "standSlug");
+            if (string.Equals(slug, standSlug, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Finds one Issued unpaid invoice for Checkout. Charges
     /// <see cref="CheckoutChargeAmount"/> (remaining receivable), not the
-    /// original invoice total after a partial bank payment.
+    /// original invoice total after a partial bank payment. Requires a
+    /// non-empty currency ISO from the books — never invents <c>usd</c>.
     /// </summary>
     public static bool TryFindIssuedUnpaid(
         JsonElement rows,
@@ -79,7 +100,7 @@ public static class PortalBilling
     {
         amount = 0m;
         number = null;
-        currency = "usd";
+        currency = "";
         if (rows.ValueKind != JsonValueKind.Array) return false;
 
         foreach (var row in rows.EnumerateArray())
@@ -93,10 +114,12 @@ public static class PortalBilling
             var charge = CheckoutChargeAmount(remaining, ReadDecimal(row, "amount"));
             if (charge is not > 0m) return false;
 
+            var cur = ReadString(row, "currency");
+            if (string.IsNullOrWhiteSpace(cur)) return false;
+
             amount = charge.Value;
             number = ReadString(row, "number");
-            var cur = ReadString(row, "currency");
-            if (!string.IsNullOrWhiteSpace(cur)) currency = cur;
+            currency = cur.Trim();
             return true;
         }
 

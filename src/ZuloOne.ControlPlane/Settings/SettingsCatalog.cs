@@ -356,8 +356,8 @@ public static class SettingsCatalog
         // ------------------------------------------------------------ Billing
         new("Billing:Enabled", Billing,
             "Billing",
-            "Master switch. Off means the sweep idles and the Billing panel refuses rather than "
-            + "half-running against an unconfigured commercial stand.",
+            "Master switch. Off means the sweep idles, the Billing panel refuses Issue/list/bank-pay, "
+            + "portal Checkout refuses, and the Stripe webhook acknowledges without posting pay or Start.",
             SettingKind.Bool, "false"),
 
         new("Billing:TenantSlug", Billing,
