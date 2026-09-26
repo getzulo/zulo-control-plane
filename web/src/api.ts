@@ -460,6 +460,19 @@ export interface DemoClaim {
   expiresAt: string;
 }
 
+export interface BillingInvoice {
+  id: string;
+  number?: string | null;
+  standSlug?: string | null;
+  dueDate?: string | null;
+  remaining: number;
+  status: string;
+  amount?: number | null;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+  subtype?: string | null;
+}
+
 export interface AuthContext {
   authenticated: boolean;
   email: string | null;
@@ -587,6 +600,31 @@ export const api = {
     `/api/demo/admin/${id}/extend`, { method: 'POST', body: JSON.stringify({ hours }) }),
   demoKill: (id: string, confirmSlug: string) => request<{ success: boolean; deleted: string }>(
     `/api/demo/admin/${id}`, { method: 'DELETE', body: JSON.stringify({ confirmSlug }) }),
+
+  billingInvoices: (q: { overdue?: boolean; standSlug?: string }) => {
+    const p = new URLSearchParams();
+    if (q.overdue) p.set('overdue', 'true');
+    if (q.standSlug) p.set('standSlug', q.standSlug);
+    return request<BillingInvoice[]>(`/api/billing/invoices?${p}`);
+  },
+
+  issueInvoice: (body: {
+    tenantId: string;
+    amount: number;
+    currency?: string;
+    periodFrom: string;
+    periodTo: string;
+    dueDate: string;
+  }) => request<BillingInvoice>('/api/billing/invoices', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
+  bankPayInvoice: (id: string, standSlug: string, amount?: number) =>
+    request<{ id?: string; number?: string; standSlug?: string; status?: string; remaining?: number }>(
+      `/api/billing/invoices/${encodeURIComponent(id)}/bank-pay`, {
+        method: 'POST',
+        body: JSON.stringify({ standSlug, amount: amount ?? null }),
+      }),
 
   /** Returns 202 with the tenant AND the job building it. */
   createTenant: (body: { slug: string; displayName?: string; adminEmail: string; imageTag?: string; plan?: string; developerStand?: boolean }) =>

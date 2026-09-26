@@ -75,7 +75,34 @@ public sealed class CommercialBooks
         return await PayloadArrayAsync("list", body, ct);
     }
 
+    /// <summary>
+    /// Issues a hosting realization. Body fields match <c>StandBilling.IssueAsync</c>:
+    /// email, standSlug, amount, currency, periodFrom, periodTo, dueDate.
+    /// </summary>
+    public async Task<JsonElement> IssueAsync(string bodyJson, CancellationToken ct)
+        => await PayloadObjectAsync("issue", bodyJson, ct);
+
+    /// <summary>
+    /// Posts a bank <c>CustomerPayment</c> against the stand's contract slice.
+    /// Body: standSlug, optional amount.
+    /// </summary>
+    public async Task<JsonElement> BankPayAsync(string bodyJson, CancellationToken ct)
+        => await PayloadObjectAsync("bank-pay", bodyJson, ct);
+
     private async Task<JsonElement> PayloadArrayAsync(string action, string? bodyJson, CancellationToken ct)
+    {
+        var payloadText = await PayloadTextAsync(action, bodyJson, ct);
+        return ParseArray(payloadText);
+    }
+
+    private async Task<JsonElement> PayloadObjectAsync(string action, string? bodyJson, CancellationToken ct)
+    {
+        var payloadText = await PayloadTextAsync(action, bodyJson, ct);
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payloadText) ? "{}" : payloadText);
+        return doc.RootElement.Clone();
+    }
+
+    private async Task<string> PayloadTextAsync(string action, string? bodyJson, CancellationToken ct)
     {
         var root = await CallAsync(action, bodyJson, ct);
         if (TryGetProperty(root, "Ok", out var ok) && ok.ValueKind == JsonValueKind.False)
@@ -86,10 +113,10 @@ public sealed class CommercialBooks
         }
 
         if (!TryGetProperty(root, "Payload", out var payloadProp))
-            return ParseArray("[]");
+            return action is "overdue" or "list" ? "[]" : "{}";
 
         var payloadText = payloadProp.ValueKind == JsonValueKind.String
-            ? payloadProp.GetString() ?? "[]"
+            ? payloadProp.GetString() ?? ""
             : payloadProp.GetRawText();
 
         if (payloadText.Contains("\"error\"", StringComparison.OrdinalIgnoreCase)
@@ -100,7 +127,7 @@ public sealed class CommercialBooks
                 throw new InvalidOperationException(err.GetString() ?? $"{ServiceName} {action} failed.");
         }
 
-        return ParseArray(payloadText);
+        return payloadText;
     }
 
     private static JsonElement ParseArray(string json)

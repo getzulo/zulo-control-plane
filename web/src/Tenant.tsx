@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, Progress, Select, SimpleGrid, Stack, Switch, Table, Tabs,
+  Alert, Anchor, Badge, Button, Card, Code, Grid, Group, Loader, Modal, NumberInput, Progress, Select, SimpleGrid, Stack, Switch, Table, Tabs,
   Text, TextInput, Title, Tooltip,
 } from '@mantine/core';
 import {
   IconAlertTriangle, IconArrowLeft, IconArrowUp, IconCamera, IconHammer, IconKey, IconPlayerPlay, IconPlayerStop, IconRotate, IconTrash, IconUnlink,
 } from '@tabler/icons-react';
-import { api, type ImageTag, type Job, type LogTenantRow, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
+import { api, type BillingInvoice, type ImageTag, type Job, type LogTenantRow, type Snapshot, type Tenant, type TenantModels, type TenantStats } from './api';
 import { JOB_COLOR, JobProgress, STATUS_COLOR, fmt, fmtBytes, inputChecked, useJob, usePoll } from './shared';
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function addMonths(d: Date, months: number): Date {
+  const next = new Date(d);
+  next.setUTCMonth(next.getUTCMonth() + months);
+  return next;
+}
 
 /**
  * One number with its context. A bar only when there is a ceiling to be a
@@ -58,6 +68,15 @@ export function TenantPage() {
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState<string | null>('Owner');
   const [resetUser, setResetUser] = useState<string | null>(null);
+  const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
+  const [billingError, setBillingError] = useState<string | null>(null);
+  const [billingBusy, setBillingBusy] = useState<string | null>(null);
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [amount, setAmount] = useState<number | string>(100);
+  const [currency, setCurrency] = useState('USD');
+  const [periodFrom, setPeriodFrom] = useState(isoDate(new Date()));
+  const [periodTo, setPeriodTo] = useState(isoDate(addMonths(new Date(), 1)));
+  const [dueDate, setDueDate] = useState(isoDate(addMonths(new Date(), 1)));
   const job = useJob(jobId);
 
   const openUpgrade = async () => {
@@ -91,6 +110,23 @@ export function TenantPage() {
       setModels(m);
       setTenant(t); setJobs(j); setSnapshots(s.snapshots); setError(null);
       try { setMembers((await api.portalMembers(id)).members); } catch { /* the list is optional on this page */ }
+      if (!t.demo) {
+        try {
+          setInvoices(await api.billingInvoices({ standSlug: t.slug }));
+          setBillingError(null);
+        } catch (e) {
+          const msg = (e as Error).message;
+          setInvoices([]);
+          if (msg.includes('commercial tenant is down') || msg.includes('Billing:TenantSlug')) {
+            setBillingError(msg);
+          } else {
+            setBillingError(msg);
+          }
+        }
+      } else {
+        setInvoices([]);
+        setBillingError(null);
+      }
       try {
         const fleet = await api.logTenants();
         setJournal(fleet.find((r) => r.slug === t.slug) ?? null);
@@ -587,6 +623,58 @@ export function TenantPage() {
       </Grid>
 
       <Card withBorder padding="md">
+        <Group justify="space-between" mb="xs">
+          <Text fw={600}>Invoices</Text>
+          {!tenant.demo && (
+            <Button size="xs" loading={billingBusy === 'issue'} onClick={() => setIssueOpen(true)}>
+              Issue
+            </Button>
+          )}
+        </Group>
+        {tenant.demo ? (
+          <Text size="sm" c="dimmed">Demo stands are not invoiced.</Text>
+        ) : billingError ? (
+          <Alert color="yellow" icon={<IconAlertTriangle size={16} />}>{billingError}</Alert>
+        ) : invoices.length === 0 ? (
+          <Text size="sm" c="dimmed">No invoices for this stand yet.</Text>
+        ) : (
+          <Table fz="sm">
+            <Table.Thead><Table.Tr>
+              <Table.Th>Number</Table.Th><Table.Th>Due</Table.Th>
+              <Table.Th>Remaining</Table.Th><Table.Th>Status</Table.Th><Table.Th />
+            </Table.Tr></Table.Thead>
+            <Table.Tbody>
+              {invoices.map((inv) => (
+                <Table.Tr key={inv.id || inv.number}>
+                  <Table.Td>{inv.number ?? inv.id.slice(0, 8)}</Table.Td>
+                  <Table.Td>{inv.dueDate ? fmt(inv.dueDate) : '—'}</Table.Td>
+                  <Table.Td>{inv.remaining}</Table.Td>
+                  <Table.Td>
+                    <Badge size="sm" variant="light" color={inv.status === 'paid' ? 'green' : 'orange'}>
+                      {inv.status}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {inv.status !== 'paid' && inv.remaining > 0 && (
+                      <Button size="xs" variant="subtle" loading={billingBusy === `pay:${inv.id}`}
+                        onClick={async () => {
+                          setBillingBusy(`pay:${inv.id}`);
+                          try {
+                            await api.bankPayInvoice(inv.id, tenant.slug);
+                            await refresh();
+                          } catch (e) { setError((e as Error).message); }
+                          finally { setBillingBusy(null); }
+                        }}>Bank paid</Button>
+                    )}
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        )}
+      </Card>
+
+      <Card withBorder padding="md">
         <Text fw={600} mb="xs">Who can open this stand</Text>
         <Text size="sm" c="dimmed" mb="sm">
           The address must already have a portal account. This is the list the cabinet shows after sign-in.
@@ -676,6 +764,44 @@ export function TenantPage() {
           </Text>
           <Code block>{revealed && `https://${tenant.slug}.zulo.one\n${revealed.user} / ${revealed.password}`}</Code>
           <Group justify="flex-end"><Button onClick={() => setRevealed(null)}>I have copied it</Button></Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={issueOpen} onClose={() => setIssueOpen(false)} title="Issue invoice" centered>
+        <Stack gap="sm">
+          <Group grow>
+            <NumberInput label="Amount" value={amount} onChange={setAmount} min={0.01} decimalScale={2} />
+            <TextInput label="Currency" value={currency} onChange={(e) => setCurrency(e.currentTarget.value)} />
+          </Group>
+          <Group grow>
+            <TextInput label="Period from" type="date" value={periodFrom}
+              onChange={(e) => setPeriodFrom(e.currentTarget.value)} />
+            <TextInput label="Period to" type="date" value={periodTo}
+              onChange={(e) => setPeriodTo(e.currentTarget.value)} />
+          </Group>
+          <TextInput label="Due" type="date" value={dueDate}
+            onChange={(e) => setDueDate(e.currentTarget.value)} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setIssueOpen(false)}>Cancel</Button>
+            <Button loading={billingBusy === 'issue'} onClick={async () => {
+              const n = typeof amount === 'number' ? amount : Number(amount);
+              if (!Number.isFinite(n) || n <= 0) { setError('Amount must be a positive number.'); return; }
+              setBillingBusy('issue');
+              try {
+                await api.issueInvoice({
+                  tenantId: tenant.id,
+                  amount: n,
+                  currency: currency.trim() || 'USD',
+                  periodFrom,
+                  periodTo,
+                  dueDate,
+                });
+                setIssueOpen(false);
+                await refresh();
+              } catch (e) { setError((e as Error).message); }
+              finally { setBillingBusy(null); }
+            }}>Issue</Button>
+          </Group>
         </Stack>
       </Modal>
 

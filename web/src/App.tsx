@@ -6,7 +6,8 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconActivity, IconCloudComputing, IconDatabaseExport, IconLayoutDashboard, IconLogout, IconMoon,
-  IconFlask, IconNotes, IconPackage, IconPackages, IconServer2, IconSettings, IconSun, IconUser,
+  IconFlask, IconNotes, IconPackage, IconPackages, IconReceipt, IconServer2, IconSettings, IconSun,
+  IconUser,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import { BuildStamp, RefreshButton, RefreshProvider } from './shared';
@@ -20,11 +21,13 @@ import { ModelsPage } from './Models';
 import { SettingsPage } from './Settings';
 import { LogsPage } from './Logs';
 import { DemosPage } from './Demos';
+import { BillingPage } from './Billing';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: IconLayoutDashboard, end: true },
   { to: '/tenants', label: 'Tenants', icon: IconCloudComputing, end: false },
   { to: '/demos', label: 'Demos', icon: IconFlask, end: false },
+  { to: '/billing', label: 'Billing', icon: IconReceipt, end: false },
   { to: '/infrastructure', label: 'Infrastructure', icon: IconServer2, end: false },
   { to: '/logs', label: 'Logs', icon: IconNotes, end: false },
   { to: '/backups', label: 'Backups', icon: IconDatabaseExport, end: false },
@@ -149,6 +152,7 @@ export default function App() {
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/tenants/:id" element={<TenantPage />} />
           <Route path="/demos" element={<DemosPage />} />
+          <Route path="/billing" element={<BillingPage />} />
           <Route path="/infrastructure" element={<InfrastructurePage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/backups" element={<SnapshotsPage />} />
